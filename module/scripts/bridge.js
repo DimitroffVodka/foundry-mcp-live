@@ -4702,6 +4702,7 @@ function connect() {
       if (serverAckTimer) { clearTimeout(serverAckTimer); serverAckTimer = null; }
       if (typeof request.serverRoot === "string") serverRootPath = request.serverRoot;
       checkServerVersion(request.serverVersion, request.protocolVersion);
+      adoptBridgeToken(request.bridgeToken);
       return;
     }
 
@@ -4744,6 +4745,46 @@ function connect() {
   ws.addEventListener("error", () => {
     // Will trigger close event — reconnect handled there
   });
+}
+
+/**
+ * Store a bridge token the server handed us into this world's setting.
+ *
+ * The server only sends one to a client it already trusts *without* a token —
+ * same machine, Foundry origin — and only when that client is a GM. So this is
+ * never how a client authenticates itself; it is how the clients that genuinely
+ * must authenticate get the value. Foundry serves world settings to everyone
+ * who loads the world, so the phone or tablet that connects from off-machine
+ * finds the token already there, and nobody transcribes a secret by hand.
+ *
+ * Overwrites a value that disagrees with the server: a stale token in a world
+ * setting is precisely what locks that world's remote clients out, and the
+ * server's is authoritative by definition.
+ *
+ * Must be idempotent — the setting's onChange drops this socket to re-handshake,
+ * so writing unconditionally would reconnect in a loop.
+ */
+async function adoptBridgeToken(token) {
+  if (typeof token !== "string" || !token.trim()) return;
+  // World-scoped settings are GM-only; a player write throws.
+  if (!game.user?.isGM) return;
+
+  const incoming = token.trim();
+  let current = "";
+  try { current = String(game.settings?.get(MODULE_ID, "bridgeToken") ?? "").trim(); }
+  catch { return; /* setting not registered — an older module in this world */ }
+  if (current === incoming) return;
+
+  try {
+    await game.settings.set(MODULE_ID, "bridgeToken", incoming);
+    const msg = current
+      ? "Foundry MCP: this world's bridge token was out of date and has been updated from the MCP server."
+      : "Foundry MCP: stored this world's bridge token from the MCP server — clients on other devices can now connect.";
+    console.log(`${MODULE_ID} | ${msg}`);
+    ui.notifications?.info(msg);
+  } catch (err) {
+    console.warn(`${MODULE_ID} | Could not store the bridge token from the server: ${err?.message || err}`);
+  }
 }
 
 function scheduleReconnect() {

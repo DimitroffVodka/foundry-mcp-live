@@ -17,7 +17,7 @@
  * installs keep working until they're upgraded.
  */
 import { WebSocketServer } from "ws";
-import { WS_PORT, WS_HOST, WS_HOST_IS_LOOPBACK, WS_ALLOWED_ORIGINS, HELLO_DEADLINE_MS, HEARTBEAT_INTERVAL_MS, WS_TOKEN, SERVER_VERSION, SERVER_ROOT, PROTOCOL_VERSION } from "./config.js";
+import { WS_PORT, WS_HOST, WS_HOST_IS_LOOPBACK, WS_ALLOWED_ORIGINS, HELLO_DEADLINE_MS, HEARTBEAT_INTERVAL_MS, WS_TOKEN, WS_TOKEN_NOTICES, SERVER_VERSION, SERVER_ROOT, PROTOCOL_VERSION } from "./config.js";
 import { log }                        from "./log.js";
 import { pendingRequests }            from "./foundry-rpc.js";
 
@@ -200,6 +200,10 @@ export function startBridgeServer() {
   // surface bind errors clearly with actionable hints.
   wss.on("listening", () => {
     log(`WebSocket bridge listening on ws://${WS_HOST}:${WS_PORT}`);
+    // Anything the token store wants the operator to know (a token was
+    // generated for them, or could not be persisted). Collected at import
+    // time; printed here, where there is a log to print to.
+    for (const notice of WS_TOKEN_NOTICES) log(notice);
     // State the auth posture every start, both ways. The token comes from the
     // environment, which is read once at process start — so an env file edited
     // days ago arms the gate on the next restart with nothing marking the
@@ -208,8 +212,8 @@ export function startBridgeServer() {
     // answerable from the log instead of from a browser console.
     log(WS_TOKEN
       ? `Bridge auth: REQUIRED for clients from another machine — a Foundry client on this machine connects `
-        + `without one. Set "MCP bridge token" in a world's Foundry MCP Live settings only for the clients that `
-        + `reach this server remotely.`
+        + `without one, and a GM client publishes the token into its world so other devices pick it up `
+        + `automatically. No manual setup needed.`
         + (WS_ALLOWED_ORIGINS.length ? ` Also trusted locally: ${WS_ALLOWED_ORIGINS.join(", ")}.` : "")
       : `Bridge auth: OFF — no FOUNDRY_WS_TOKEN or BRIDGE_TOKEN set, every client that reaches the port is trusted.`);
     // Binding off-loopback is the deliberate "let a second device connect"
@@ -356,6 +360,16 @@ export function startBridgeServer() {
             // Lets the out-of-date dialog print a `cd` that actually works
             // rather than guessing at ~/foundry-mcp-live.
             serverRoot: SERVER_ROOT,
+            // Hand the token to clients that are already trusted without it,
+            // so the GM never has to transcribe a secret: the module stores it
+            // in the world setting, and Foundry serves that to every other
+            // client in the world — including the phone that DOES need it.
+            //
+            // Three conditions, all necessary. Trusted-local, or we would be
+            // handing the secret to the very clients it exists to keep out.
+            // GM, because only a GM can write a world setting — sending it to
+            // a player leaks it for nothing. And a token must exist at all.
+            ...(WS_TOKEN && trustedLocal && isGM ? { bridgeToken: WS_TOKEN } : {}),
           }));
         } catch { /* socket may have closed; ignore */ }
 

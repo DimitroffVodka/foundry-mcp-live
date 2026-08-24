@@ -49,9 +49,15 @@ There are two tokens, because the two endpoints have very different exposure.
 Prefer `FOUNDRY_WS_TOKEN` for the LAN case. `/mcp` is bound to `127.0.0.1` in code and can't be reached off-box regardless, so putting Bearer auth on it buys nothing there — while costing you every MCP client that can't send a header.
 
 ```bash
-# bridge only — the LAN case
+# bridge only — the LAN case, if you want to choose the value yourself
 FOUNDRY_WS_TOKEN=$(openssl rand -hex 24)
 ```
+
+**You do not have to do that.** If the bridge is bound past loopback and no token is configured, the server generates one on first start and saves it to `bridge-token` in its config directory (`~/.config/foundry-mcp-live/` on Linux and macOS, `%APPDATA%\foundry-mcp-live\` on Windows), mode `0600`. It is reused on every later start, so the value stays stable. A token you set yourself always wins and is never copied to disk.
+
+**And you do not have to transcribe it into Foundry.** A GM client that the server already trusts without a token — same machine, Foundry origin — receives the token in the connection handshake and writes it into that world's *MCP bridge token* setting. Foundry serves world settings to every client in the world, so the phone or tablet that genuinely has to authenticate finds it already there. A world setting that disagrees with the server is overwritten, since a stale token is exactly what locks a world's remote clients out.
+
+Nothing is handed to a client that isn't already trusted, and nothing is handed to a player — only a GM can write a world setting, so sending it to anyone else would leak it for no benefit. A loopback-only bridge never generates a token at all.
 
 **The token applies to clients from another machine, not to yours.** A Foundry client connecting over loopback is already running as the user who owns the server process, so requiring it to authenticate protects nothing — while costing a pasted secret in every world you create, and failing with a silent reconnect loop when you forget. So a peer on the loopback interface skips the token check, and the LAN clients the token exists for are unaffected.
 
