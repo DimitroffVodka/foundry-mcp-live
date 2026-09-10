@@ -23,10 +23,8 @@ import { callFoundry }                      from "../lib/foundry-rpc.js";
 import { upsertTool, noteTrackedTool }      from "../lib/hot-reload.js";
 
 export const TARGET_USER_DESC =
-  'Foundry user to route this call to. Omit (or pass "GM" / "self") '
-  + 'to target the GM (default). Pass a player\'s exact user name to '
-  + 'run as that player. Use list_connected_bridges to see who is '
-  + 'currently connected.';
+  'Foundry user to route to. Omit for the GM (default); use '
+  + 'list_connected_bridges for valid names.';
 
 export const AUDIT_DESC =
   'Return an audit block with before/after diffs and undo instructions.';

@@ -4,6 +4,8 @@
  */
 import { readFileSync } from "node:fs";
 
+import { loadOrCreateWsToken } from "./bridge-token-store.js";
+
 // Server version — single source of truth is server/package.json, so a
 // `git pull` that bumps the package version is automatically reflected here
 // (and announced to the Foundry module in the hello-ack).
@@ -14,6 +16,16 @@ try {
   ).version || _serverVersion;
 } catch { /* keep fallback */ }
 export const SERVER_VERSION = _serverVersion;
+
+// Absolute path to the repo root. Reported to the module in the hello-ack so
+// the "server is out of date" dialog can print a `cd` that actually works.
+// It previously hardcoded `~/foundry-mcp-live`, which is wrong for anyone who
+// cloned anywhere else — the copied command then fails with "no such
+// directory", which is a worse experience than no command at all.
+export const SERVER_ROOT = (() => {
+  try { return new URL("../..", import.meta.url).pathname.replace(/\/$/, ""); }
+  catch { return ""; }
+})();
 
 // Wire-protocol version. Bump ONLY when the module↔server contract changes in
 // a breaking way (new required handshake field, renamed tool semantics, etc.)
@@ -55,6 +67,24 @@ export const RELAUNCH_CONFIG   = {
   autoMaxBackoffMs: Number.parseInt(process.env.FOUNDRY_RELAUNCH_AUTO_MAX_BACKOFF_MS ?? "", 10) || 300_000,
 };
 
+// --- Relay gateway ---------------------------------------------------------
+// A managed browser on this machine that joins Foundry as an ordinary client
+// and relays tool calls to browsers the MCP server cannot reach directly —
+// phones, tablets, a Steam Deck, anything on a hosted world. Off by default:
+// it launches a real Chromium, so it should be an explicit choice.
+export const RELAY_CONFIG = {
+  enabled: /^(1|true|yes)$/i.test(process.env.FOUNDRY_RELAY_ENABLED ?? ""),
+  foundryUrl: process.env.FOUNDRY_RELAY_URL ?? process.env.FOUNDRY_RELAUNCH_URL ?? "",
+  // Must be GM-capable: publishing the gateway's public keys writes a world
+  // setting, and Foundry only lets GMs do that. That restriction is what makes
+  // the setting a trustworthy channel for the key in the first place.
+  gmUser: process.env.FOUNDRY_RELAY_GM_USER ?? process.env.FOUNDRY_RELAUNCH_GM_USER ?? "",
+  gmPassword: process.env.FOUNDRY_RELAY_GM_PASSWORD ?? process.env.FOUNDRY_RELAUNCH_GM_PASSWORD ?? "",
+  chromePath: process.env.FOUNDRY_CHROME_PATH ?? "",
+  userDataDir: process.env.FOUNDRY_RELAY_USER_DATA_DIR ?? "",
+  headless: !/^(0|false|no)$/i.test(process.env.FOUNDRY_RELAY_HEADLESS ?? "1"),
+};
+
 // --- Security knobs (off by default; opt in via env vars) -----------------
 // When BRIDGE_TOKEN is set, every MCP HTTP request must include the
 // `Authorization: Bearer <token>` header, and every Foundry WebSocket hello
@@ -71,11 +101,53 @@ export const BRIDGE_TOKEN     = process.env.BRIDGE_TOKEN ?? "";
 // has no per-server header config at all. FOUNDRY_WS_TOKEN gates only the
 // WebSocket hello, and defaults to BRIDGE_TOKEN so existing single-token
 // setups behave exactly as before.
-export const WS_TOKEN         = process.env.FOUNDRY_WS_TOKEN ?? BRIDGE_TOKEN;
+const WS_TOKEN_CONFIGURED     = process.env.FOUNDRY_WS_TOKEN ?? BRIDGE_TOKEN;
 
 // True when the bridge port is reachable from somewhere other than this
 // machine. Used to decide whether an unauthenticated bridge is a real hazard.
 export const WS_HOST_IS_LOOPBACK = /^(127\.\d+\.\d+\.\d+|::1|localhost)$/i.test(WS_HOST);
+
+// Status lines from token resolution. Collected here and printed by bridges.js
+// once the log surface exists, so config.js stays quiet at import time.
+export const WS_TOKEN_NOTICES = [];
+
+// The token this run will actually enforce. When the bridge is exposed past
+// loopback and the operator supplied nothing, the server generates and
+// persists one rather than making them produce a secret by hand — see
+// bridge-token-store.js. Loopback-only setups still get "" and no auth.
+const _wsToken = loadOrCreateWsToken({
+  configured: WS_TOKEN_CONFIGURED,
+  exposed:    !WS_HOST_IS_LOOPBACK,
+  onNotice:   (msg) => WS_TOKEN_NOTICES.push(msg),
+});
+export const WS_TOKEN         = _wsToken.token;
+export const WS_TOKEN_SOURCE  = _wsToken.source;
+export const WS_TOKEN_PATH    = _wsToken.path;
+
+// Extra browser origins allowed to open a bridge socket from this machine
+// without a token. Any loopback origin (http://localhost:30000 and friends) is
+// already accepted, so this is only needed when the Foundry client is served
+// from a non-loopback name that still reaches the bridge over loopback — an
+// SSH tunnel, or a hosts-file alias like http://foundry.lan:30000.
+// Comma-separated, exact origins: "https://foo.example,http://bar.lan:30000".
+// The operator's own Foundry URLs count too. A browser on THIS machine showing
+// a world hosted elsewhere (the relay gateway's Chromium, or just a tab open on
+// your hosted world) arrives over loopback but carries that world's remote
+// origin, so it would otherwise need a hand-pasted token — which is exactly the
+// setup step this is meant to remove. These URLs are already declared by the
+// operator as their own Foundry, so treating them as trusted *when the peer is
+// also local* adds no reach a hostile page didn't already have.
+const _originOf = (url) => {
+  try { return new URL(String(url)).origin; } catch { return ""; }
+};
+export const WS_ALLOWED_ORIGINS = [
+  ...(process.env.FOUNDRY_WS_ALLOWED_ORIGINS ?? "").split(","),
+  ...FOUNDRY_URLS,
+  RELAY_CONFIG.foundryUrl,
+  RELAUNCH_CONFIG.foundryUrl,
+]
+  .map(value => _originOf(String(value).trim()) || String(value).trim())
+  .filter(Boolean);
 
 // `evaluate` runs arbitrary JS in the live Foundry browser context. Gated
 // behind an explicit opt-in to make the default install safer.

@@ -1,123 +1,97 @@
 /**
  * Canvas + token tools.
  *
- * Two flavors here:
- *   - Standard routed tools (scene query, token CRUD, conditions, target)
- *     use `registerRoutedTool` — text-content replies via `callFoundry`.
- *   - Image-returning tools (`screenshot`, `screenshot_dom`, `capture_scene`)
- *     are Type B: they bypass `registerRoutedTool` because they need
- *     `callFoundryImage` to wrap the reply as an MCP image content block.
- *     For Type B tools we manually inject `targetUser` into the schema.
+ * Merged surfaces (2026-08-19 reduction):
+ *   - `scene_read` — get_scene / get_scene_placeables
+ *   - `token`      — move_token / create_token / update_token / delete_tokens /
+ *                    toggle_token_condition / target / set_canvas_level
+ *
+ * `screenshot` stays separate (image-returning, Type-B: callFoundryImage);
+ * `query_grid` stays separate (complex spatial schema).
  */
 import { z }                                from "zod";
-import { registerRoutedTool, registerRawTool, TARGET_USER_DESC, AUDIT_DESC } from "./_helpers.js";
+import { registerRoutedTool, registerRawTool, registerMergedTool, TARGET_USER_DESC, AUDIT_DESC } from "./_helpers.js";
 import { callFoundry, callFoundryImage }    from "../lib/foundry-rpc.js";
+import { cdpScreenshot }                    from "../lib/cdp-screenshot.js";
 
 export function registerCanvasTools(mcp) {
-  // --- Scene + token query ---
-  registerRoutedTool(mcp, "get_scene",
-    "Get the active scene: dimensions, grid settings, and all tokens with positions.",
-    {});
-
-  registerRoutedTool(mcp, "get_selected_token",
-    "Get the currently selected token on the canvas and its actor data.",
-    {});
-
-  registerRoutedTool(mcp, "get_token_details",
-    "Get full details for a single token: position, size, rotation, hidden state, disposition, " +
-    "linked actor data, and active status conditions.",
-    { token: z.string().describe("Token id, token name, or linked actor name on the active scene.") });
-
-  // --- Token mutation (merged: move_token, move_token_pathed) ---
-  registerRawTool(mcp, "move_token",
-    "Move a token to (x, y) on the active scene. "
-    + "Default (pathed=false): straight move to (x, y); optionally disable animation for instant placement. "
-    + "pathed=true: A* pathfinding against scene walls (routes to move_token_pathed) — falls back to a plain "
-    + "teleport if no polygon backend is available. Set canOpenDoors=true to open closed doors along the path "
-    + "(their wall ids are returned in doorsOpened). Only the final waypoint animates; intermediate hops "
-    + "teleport. Returns pathCost when pathfinding runs. The canOpenDoors/elevation/rotation params apply only "
-    + "to pathed=true.",
+  // --- Scene reads (merged) ---
+  registerMergedTool(mcp, "scene_read",
+    "Read the active scene. action 'summary' — get_scene: dimensions, grid settings, fog-of-war "
+    + "mode, and all tokens with positions and per-token fog exploration state (inExplored). "
+    + "action 'placeables' — get_scene_placeables: list a given placeable type (templates, regions, "
+    + "walls, lights, sounds, drawings, notes, tiles) with full toObject() data and optional "
+    + "`select` projection — validates the collections `summary` doesn't return. On Foundry v14+, "
+    + "MeasuredTemplate items come back in the legacy template shape (t/x/y/distance/…) but are "
+    + "stored as Region documents under the hood.",
     {
-      token:        z.string().describe("Token id, token name, or linked actor name."),
-      x:            z.number().describe("Target x coordinate (scene pixels)."),
-      y:            z.number().describe("Target y coordinate (scene pixels)."),
-      animate:      z.boolean().optional().describe("Animate movement. Default true. (pathed=true: animates only the final hop.)"),
-      pathed:       z.boolean().optional().describe("Use A* pathfinding against scene walls (routes to move_token_pathed). Default false."),
-      canOpenDoors: z.boolean().optional().describe("[pathed=true] Open closed doors along the path. Default false."),
-      elevation:    z.number().optional().describe("[pathed=true] Applied to the final waypoint."),
-      rotation:     z.number().optional().describe("[pathed=true] Applied to the final waypoint."),
-      audit:        z.boolean().optional().describe(AUDIT_DESC),
-      targetUser:   z.string().optional().describe(TARGET_USER_DESC),
+      action:   z.enum(["summary", "placeables"]).optional().describe("What to read. Default 'summary'."),
+      sceneId:  z.string().optional().describe("Target scene id. Default: active scene."),
+      type:     z.enum(["Token","MeasuredTemplate","Region","Wall","AmbientLight","AmbientSound","Drawing","Note","Tile"]).optional().describe("[placeables] Document type. Default 'Token'."),
+      select:   z.array(z.string()).optional().describe(
+        "[placeables] Optional projection — dotted field paths to keep (e.g. ['_id','name','behaviors.type']). "
+        + "Cuts payload size when the caller only needs a few fields per item."
+      ),
     },
-    async (params) => {
-      const { targetUser, pathed = false, ...rest } = params;
-      const bridgeTool = pathed === true ? "move_token_pathed" : "move_token";
-      return callFoundry(bridgeTool, rest, targetUser);
-    });
+    { summary: "get_scene", placeables: "get_scene_placeables" },
+    "action",
+    { summary: [], placeables: [] });
 
-  registerRoutedTool(mcp, "update_token",
-    "Update token properties on the active scene. Allowed updates: x, y, width, height, rotation, " +
-    "hidden, disposition, name, elevation, lockRotation, sort, alpha, tint.",
+  // --- Token ops (merged) ---
+  registerMergedTool(mcp, "token",
+    "Token operations on the active scene. "
+    + "action 'details' — the dense read: position, size, rotation, hidden/disposition, sight, light, "
+    + "and the linked actor snapshot (system data, statuses, effects). "
+    + "action 'move' — straight move or wall-aware A* path (pathed=true; canOpenDoors opens doors; "
+    + "onlyUnexplored restricts to fog-covered destinations). "
+    + "action 'create' — place a token for an actor (pixels x/y OR grid cells gridX/gridY). "
+    + "action 'update' — patch whitelisted fields (x,y,width,height,rotation,hidden,disposition,name,"
+    + "elevation,lockRotation,sort,alpha,tint). "
+    + "action 'delete' — remove one or more tokens (permanent). "
+    + "action 'toggleCondition' — toggle a status effect on the linked actor "
+    + "(valid ids live in CONFIG.statusEffects — inspect via evaluate if unsure). "
+    + "action 'target' — set the user's targets (call before an attack click; empty array clears). "
+    + "action 'setLevel' — switch the viewed level of a multi-level scene (v14).",
     {
-      token:   z.string().describe("Token id, token name, or linked actor name."),
-      updates: z.record(z.string(), z.any()).describe("Object of fields to update (whitelisted keys only)."),
-      audit:   z.boolean().optional().describe(AUDIT_DESC),
-    });
+      action:        z.enum(["details", "move", "create", "update", "delete", "toggleCondition", "target", "setLevel"]).describe("Token operation."),
+      tokenName:     z.string().optional().describe("[details/move/update/toggleCondition] Token id, token name, or linked actor name."),
+      x:             z.number().optional().describe("[move] Target x px. [create] Pixel x — use this OR gridX."),
+      y:             z.number().optional().describe("[move] Target y px. [create] Pixel y — use this OR gridY."),
+      animate:       z.boolean().optional().describe("[move] Animate (default true; pathed animates only the final hop)."),
+      pathed:        z.boolean().optional().describe("[move] A* pathfinding against scene walls. Default false."),
+      canOpenDoors:  z.boolean().optional().describe("[move/pathed] Open closed doors along the path. Default false."),
+      onlyUnexplored:z.boolean().optional().describe("[move] Reject the move if the destination is already explored (fog exploration)."),
+      elevation:     z.number().optional().describe("[move/pathed] Applied to the final waypoint. [setLevel] Picks the level whose [bottom,top] contains it."),
+      rotation:      z.number().optional().describe("[move/pathed] Applied to the final waypoint. [create] Rotation in degrees."),
+      actorId:       z.string().optional().describe("[create] Actor whose token to place."),
+      sceneId:       z.string().optional().describe("[create/setLevel] Target scene id. Default: active scene."),
+      gridX:         z.number().optional().describe("[create] Grid cell column (0-indexed). Wins over x/y if both given."),
+      gridY:         z.number().optional().describe("[create] Grid cell row (0-indexed)."),
+      hidden:        z.boolean().optional().describe("[create] Spawn hidden to non-GMs."),
+      name:          z.string().optional().describe("[create] Override the token name (defaults to actor name)."),
+      updates:       z.record(z.string(), z.any()).optional().describe("[update] Fields to update (whitelisted keys only)."),
+      tokens:        z.array(z.string()).optional().describe("[delete] Token ids/names to remove. [target] Token names/ids to target; empty array clears."),
+      condition:     z.string().optional().describe("[toggleCondition] Condition id (e.g. 'prone', 'poisoned')."),
+      active:        z.boolean().optional().describe("[toggleCondition] Force on (true) or off (false). Omit to toggle."),
+      levelId:       z.string().optional().describe("[setLevel] Level document id (preferred — unambiguous). Use this OR elevation."),
+      audit:         z.boolean().optional().describe(AUDIT_DESC),
+    },
+    { details: "get_token_details", move: "move_token", create: "create_token", update: "update_token", delete: "delete_tokens",
+      toggleCondition: "toggle_token_condition", target: "target", setLevel: "set_canvas_level" },
+    "action",
+    { details: ["tokenName"], move: ["tokenName", "x", "y"], create: ["actorId"], update: ["tokenName", "updates"],
+      delete: ["tokens"], toggleCondition: ["tokenName", "condition"], target: ["tokens"], setLevel: [] });
 
-  registerRoutedTool(mcp, "delete_tokens",
-    "Delete one or more tokens from the active scene.",
+  // --- Spatial grid query (structured alternative to screenshot-based spatial reasoning) ---
+  registerRoutedTool(mcp, "query_grid",
+    "Query spatial grid state as structured data — the video-game approach. Returns per-cell booleans for explored (fog), visible (current line-of-sight), and occupied (token present). Pass either `cells` (array of {gx,gy} grid coords) or `region` ({minGX, minGY, maxGX, maxGY}) to query a rectangular area. Grid coords are 0-indexed; pixel centers are returned for each cell. "
+    + "Use this instead of screenshot for spatial reasoning — it's cheaper, faster, "
+    + "and deterministic.",
     {
-      tokens: z.array(z.string()).describe("Token ids, names, or linked actor names."),
-      audit:  z.boolean().optional().describe(AUDIT_DESC),
-    });
+      cells:  z.array(z.object({ gx: z.number(), gy: z.number() })).optional().describe("Explicit grid cells to query. Mutually exclusive with `region`."),
+      region: z.object({ minGX: z.number(), minGY: z.number(), maxGX: z.number(), maxGY: z.number() }).optional().describe("Bounding box in grid coords (inclusive). Max 2500 cells."),
+    }, "query_grid");
 
-  // --- Conditions / targeting ---
-  registerRoutedTool(mcp, "toggle_token_condition",
-    "Toggle a status effect / condition on a token's linked actor. Use `get_available_conditions` " +
-    "to see valid condition ids for the current system.",
-    {
-      token:     z.string().describe("Token id, token name, or linked actor name."),
-      condition: z.string().describe("Condition id (e.g. 'prone', 'poisoned')."),
-      active:    z.boolean().optional().describe("Force on (true) or off (false). Omit to toggle."),
-      audit:     z.boolean().optional().describe(AUDIT_DESC),
-    });
-
-  registerRoutedTool(mcp, "get_available_conditions",
-    "List all status conditions registered in the current system (id, label, icon).",
-    {});
-
-  registerRoutedTool(mcp, "target",
-    "Set the current user's targets to the named tokens on the active scene. " +
-    "Equivalent to hovering each token and pressing T. Pass an empty array to clear. " +
-    "Call this before `click`-ing an attack so the system computes hits against real defenses.",
-    {
-      tokens: z.array(z.string()).describe("Token names, actor names, or token document ids on the current scene. Empty array clears targets."),
-      audit:  z.boolean().optional().describe(AUDIT_DESC),
-    });
-
-  // --- Multi-level scene (v0.11.2) ---
-  registerRoutedTool(mcp, "get_scene_levels",
-    "Return the levels collection on a multi-level scene (Foundry v14 native, " +
-    "not present on v12/v13) as a flat array of `{id, name, elevation: {bottom, top}}`. " +
-    "Empty array for single-level scenes or pre-v14 worlds. Includes the " +
-    "currently-active `levelId` when the scene is the viewed one.",
-    {
-      sceneId: z.string().optional().describe("Target scene id. Default: active scene."),
-    });
-
-  registerRoutedTool(mcp, "set_canvas_level",
-    "Switch the canvas's active level — which floor of a multi-level scene " +
-    "is being viewed. Affects anything reading `canvas.level` (shadowdark-" +
-    "extras dungeon painter, level-aware visibility, wall-height, etc). " +
-    "Pass `levelId` OR an `elevation` (picks the level whose range contains " +
-    "it). Activates the target scene first if it isn't currently active.",
-    {
-      sceneId:   z.string().optional().describe("Target scene id. Default: active scene."),
-      levelId:   z.string().optional().describe("Level document id (preferred — unambiguous)."),
-      elevation: z.number().optional().describe("Elevation in Foundry units; picks the level whose [bottom, top] contains it."),
-    });
-
-  // --- Image-returning tool (Type B: manual targetUser injection) ---
   // Merged: screenshot (canvas), screenshot_dom (dom), capture_scene (scene_grid).
   // All three return MCP image content via callFoundryImage, so this uses a
   // custom callback rather than registerMergedTool (which returns text only).
@@ -131,15 +105,21 @@ export function registerCanvasTools(mcp) {
     + "default 'png'). Fills the gap 'canvas' can't — PIXI-only never captures DOM. html2canvas loads lazily "
     + "from a CDN on first use.\n"
     + "• target 'scene_grid' → the active scene canvas as a base64 WebP with a coordinate grid overlay "
-    + "(gx,gy labels per cell), useful for spatial reasoning. Takes no extra capture params.",
+    + "(gx,gy labels per cell), useful for spatial reasoning. Takes no extra capture params.\n"
+    + "• target 'cdp' → a DOM element captured via Chrome DevTools Protocol (pixel-perfect, "
+    + "no html2canvas approximations). Uses selector (CSS, required), scale (default 2.0, controls "
+    + "output resolution multiplier). Captures the browser's actual composited output — form inputs, "
+    + "fonts, and CSS render exactly as the user sees them. Requires the bridge Chromium to be "
+    + "running on port 9222.",
     {
-      target:   z.enum(["canvas", "dom", "scene_grid"]).optional().describe(
+      target:   z.enum(["canvas", "dom", "scene_grid", "cdp"]).optional().describe(
         "What to capture: 'canvas' (PIXI game canvas, default), 'dom' (a DOM element via html2canvas), "
-        + "or 'scene_grid' (scene canvas with a coordinate grid overlay)."),
-      scale:    z.number().optional().describe("[canvas/dom] Resize factor (0.1–1.0). Default 0.5 (canvas) / 0.75 (dom)."),
+        + "'scene_grid' (scene canvas with a coordinate grid overlay), "
+        + "or 'cdp' (a DOM element via Chrome DevTools Protocol — pixel-perfect browser rendering)."),
+      scale:    z.number().optional().describe("[canvas/dom/cdp] Resize factor (0.1–1.0 for canvas, 0.1–1.0 for dom, 1.0–4.0 for cdp). Default 0.5 (canvas) / 0.75 (dom) / 2.0 (cdp)."),
       quality:  z.number().optional().describe("[canvas/dom] JPEG quality (0.1–1.0). Default 0.7 (canvas) / 0.8 (dom). Ignored for PNG."),
       format:   z.enum(["jpeg", "png"]).optional().describe("[canvas/dom] Output format. Default 'jpeg' (canvas) / 'png' (dom)."),
-      selector: z.string().optional().describe("[dom] CSS selector of the element to capture. Default: 'body'."),
+      selector: z.string().optional().describe("[dom/cdp] CSS selector of the element to capture. Default: 'body'."),
       targetUser: z.string().optional().describe(TARGET_USER_DESC),
     },
     async (p) => {
@@ -158,6 +138,25 @@ export function registerCanvasTools(mcp) {
         return callFoundryImage("capture_scene", {},
           d => `Scene "${d.sceneName}" [${d.sceneId}] — ${d.width}×${d.height} ${d.mimeType} with grid overlay`,
           targetUser);
+      }
+      if (target === "cdp") {
+        if (!selector) return { content: [{ type: "text", text: "Error: 'selector' is required for target 'cdp'" }] };
+        try {
+          const data = await cdpScreenshot(selector, {
+            scale: scale ?? 2,
+            format: format ?? "png",
+            quality,
+          });
+          if (data.error) return { content: [{ type: "text", text: `CDP screenshot error: ${data.error}` }] };
+          return {
+            content: [
+              { type: "image", data: data.image, mimeType: data.mimeType },
+              { type: "text",  text: `CDP screenshot of \`${data.selector}\` (${data.element.tag}${data.element.id ? "#" : ""}) — ${data.width}×${data.height} ${data.mimeType}` },
+            ],
+          };
+        } catch (err) {
+          return { content: [{ type: "text", text: `CDP screenshot failed: ${err.message}` }] };
+        }
       }
       // target === "canvas"
       const toolParams = {};

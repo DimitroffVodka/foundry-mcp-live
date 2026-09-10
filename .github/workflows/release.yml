@@ -23,6 +23,33 @@ jobs:
             exit 1
           fi
 
+      - name: Pin manifest/download URLs to this release
+        run: |
+          # `download` must point at THIS tag's asset. It shipped pointing at
+          # releases/latest, which meant installing a pre-release manifest made
+          # Foundry fetch the *stable* zip and install that instead — silently,
+          # and correctly per the manifest it was given.
+          #
+          # `manifest` is what Foundry re-checks for updates, so it stays on
+          # releases/latest for a stable build. A pre-release pins it to its own
+          # tag as well, otherwise the beta immediately sees "latest" (an older
+          # stable) and offers to downgrade itself.
+          REPO_URL="https://github.com/${GITHUB_REPOSITORY}"
+          TAG="${GITHUB_REF_NAME}"
+          case "$TAG" in
+            *-*) MANIFEST_URL="${REPO_URL}/releases/download/${TAG}/module.json" ;;
+            *)   MANIFEST_URL="${REPO_URL}/releases/latest/download/module.json" ;;
+          esac
+
+          jq --arg m "$MANIFEST_URL" \
+             --arg d "${REPO_URL}/releases/download/${TAG}/module.zip" \
+             '.manifest = $m | .download = $d' \
+             module/module.json > module/module.json.tmp
+          mv module/module.json.tmp module/module.json
+
+          echo "manifest: $(jq -r .manifest module/module.json)"
+          echo "download: $(jq -r .download module/module.json)"
+
       - name: Build module.zip
         run: |
           cd module
@@ -34,8 +61,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # A tag with a pre-release suffix (v0.19.0-beta.1) is published as a
+          # GitHub pre-release. That keeps it out of `releases/latest`, which is
+          # what the manifest URL baked into every installed copy points at —
+          # so a beta cannot offer itself as an update to people running stable.
+          # Install a pre-release deliberately, via its own versioned manifest:
+          #   releases/download/<tag>/module.json
+          PRERELEASE=""
+          case "$GITHUB_REF_NAME" in
+            *-*) PRERELEASE="--prerelease" ;;
+          esac
+
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
+            $PRERELEASE \
             module/module.json \
             module.zip

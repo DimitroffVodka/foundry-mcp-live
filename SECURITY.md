@@ -35,6 +35,43 @@ Treat the MCP endpoint with the same trust you'd give a logged-in GM browser ses
 - **Client relaunch is opt-in and loopback-only by default.** `relaunch_client` is absent unless `FOUNDRY_RELAUNCH_ENABLED=1`. It rejects credentials embedded in URLs and non-loopback Foundry hosts unless remote use is explicitly enabled.
 - **Vendored dependencies.** `html2canvas` is bundled in `module/lib/`; the module never fetches code from a CDN at runtime.
 
+## What leaves your machine
+
+Nothing. This section exists so you don't have to take that on faith.
+
+**The Foundry module** (`module/`) makes no outbound requests. It opens one
+WebSocket to the bridge — `127.0.0.1:3001` by default, or whatever you set
+`FOUNDRY_WS_HOST`/`FOUNDRY_BRIDGE_URL` to — and talks to nothing else.
+`html2canvas` is vendored in `module/lib/` precisely so no CDN is contacted at
+render time. There is no telemetry, no analytics, no version ping, no
+crash reporter.
+
+**The MCP server** (`server/`) makes exactly three kinds of outbound request,
+all to hosts you configured and all normally loopback:
+
+| What | Where | When |
+|---|---|---|
+| `GET /api/status` | your Foundry URL | relay gateway health check |
+| Chrome DevTools Protocol | the local Chromium it launched | screenshots, recording, relaunch |
+| npm registry | — | `npm install` only, never at runtime |
+
+**What is written to disk, and stays there:**
+
+| File | Contents | Notes |
+|---|---|---|
+| `server/usage-telemetry.jsonl` | One line per tool call: name, ok/error, duration, a truncated args preview, and a truncated `evaluate` body | Local only. Gitignored. On by default — `FOUNDRY_MCP_USAGE=0` disables, `FOUNDRY_MCP_USAGE_LOG=<path>` redirects |
+| `GET /api/usage` | In-memory aggregate (counts, error rates, durations). No args, no eval bodies | Loopback; behind `BRIDGE_TOKEN` when one is set |
+| bridge token store | The generated WebSocket token | Written on first run so you don't have to paste one |
+
+The telemetry log can contain fragments of your world data, because it records
+argument previews. That is why it never leaves the machine and why it is in
+`.gitignore` — but if you are about to attach a debug bundle to an issue,
+that is the file to check first.
+
+**What the AI client sees** is a separate question, and a larger one: any tool
+result you let it read is data you have handed to that client's operator. See
+[Known residual risks](#known-residual-risks).
+
 ## Opt-in: token auth
 
 There are two tokens, because the two endpoints have very different exposure.
@@ -49,9 +86,24 @@ There are two tokens, because the two endpoints have very different exposure.
 Prefer `FOUNDRY_WS_TOKEN` for the LAN case. `/mcp` is bound to `127.0.0.1` in code and can't be reached off-box regardless, so putting Bearer auth on it buys nothing there — while costing you every MCP client that can't send a header.
 
 ```bash
-# bridge only — the LAN case
+# bridge only — the LAN case, if you want to choose the value yourself
 FOUNDRY_WS_TOKEN=$(openssl rand -hex 24)
 ```
+
+**You do not have to do that.** If the bridge is bound past loopback and no token is configured, the server generates one on first start and saves it to `bridge-token` in its config directory (`~/.config/foundry-mcp-live/` on Linux and macOS, `%APPDATA%\foundry-mcp-live\` on Windows), mode `0600`. It is reused on every later start, so the value stays stable. A token you set yourself always wins and is never copied to disk.
+
+**And you do not have to transcribe it into Foundry.** A GM client that the server already trusts without a token — same machine, Foundry origin — receives the token in the connection handshake and writes it into that world's *MCP bridge token* setting. Foundry serves world settings to every client in the world, so the phone or tablet that genuinely has to authenticate finds it already there. A world setting that disagrees with the server is overwritten, since a stale token is exactly what locks a world's remote clients out.
+
+Nothing is handed to a client that isn't already trusted, and nothing is handed to a player — only a GM can write a world setting, so sending it to anyone else would leak it for no benefit. A loopback-only bridge never generates a token at all.
+
+**The token applies to clients from another machine, not to yours.** A Foundry client connecting over loopback is already running as the user who owns the server process, so requiring it to authenticate protects nothing — while costing a pasted secret in every world you create, and failing with a silent reconnect loop when you forget. So a peer on the loopback interface skips the token check, and the LAN clients the token exists for are unaffected.
+
+Loopback alone isn't enough to be trusted, because CORS does not apply to WebSockets: any page you happen to visit can open a socket to `127.0.0.1`. The discriminator is the browser's `Origin` header, which page JavaScript cannot forge. A local peer is trusted when:
+
+- the connection is not proxied (an `X-Forwarded-*` header means the loopback address belongs to the proxy, not the peer), **and**
+- its `Origin` is a loopback URL, or is listed in `FOUNDRY_WS_ALLOWED_ORIGINS`, or is absent entirely (no `Origin` means no browser — a script or test harness, which on loopback is already user-privileged).
+
+`Origin: null` — a sandboxed iframe or a `file://` page — is refused, since a hostile page can arrange it deliberately. A world setting holding a stale token still connects locally; the server logs a note that the value would fail from another machine.
 
 **Who ends up holding the token.** The Foundry-side value lives in a world-scoped module setting, which Foundry serves to every client that loads the world. That is the point — it's what removes the per-device setup step — but it does mean the token is readable by anyone who can log into the world, not just the GM. The trade is deliberate:
 

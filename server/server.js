@@ -17,7 +17,12 @@
  *   BRIDGE_TOKEN              – If set, required for HTTP + WS connections
  *   FOUNDRY_WS_TOKEN          – Bridge-only token; overrides BRIDGE_TOKEN for the
  *                               WebSocket half so you can secure a LAN-exposed
- *                               bridge without adding auth to loopback MCP clients
+ *                               bridge without adding auth to loopback MCP clients.
+ *                               Required only of bridges from another machine —
+ *                               a Foundry client on this machine connects without it
+ *   FOUNDRY_WS_ALLOWED_ORIGINS – Extra browser origins allowed to connect from this
+ *                               machine without a token (comma-separated). Loopback
+ *                               origins are already allowed
  *   FOUNDRY_MCP_ALLOW_EVAL    – "1" enables the `evaluate` tool (off by default)
  */
 
@@ -27,7 +32,9 @@ import { createMcpExpressApp }            from "@modelcontextprotocol/sdk/server
 import { randomUUID }                     from "crypto";
 
 import { log }                            from "./lib/log.js";
-import { HTTP_PORT, BRIDGE_TOKEN, ALLOW_EVAL, SERVER_VERSION, RELAUNCH_CONFIG } from "./lib/config.js";
+import { HTTP_PORT, BRIDGE_TOKEN, ALLOW_EVAL, SERVER_VERSION, RELAUNCH_CONFIG, RELAY_CONFIG } from "./lib/config.js";
+import { createRelayGateway }            from "./lib/relay-gateway.js";
+import { setRelayGateway }               from "./lib/relay-runtime.js";
 import { startBridgeServer, bridges }     from "./lib/bridges.js";
 import { startHotReloadWatcher }          from "./lib/hot-reload.js";
 import { registerTools }                  from "./tools/index.js";
@@ -52,6 +59,23 @@ const relaunchSupervisor = createRelaunchSupervisor({
   logger: log,
 });
 relaunchSupervisor.start();
+
+// Relay gateway (opt-in): a managed browser that joins Foundry and relays tool
+// calls to clients the MCP server cannot reach directly. Startup is
+// deliberately non-fatal — it launches a real browser and logs into a world,
+// both of which can fail for reasons that shouldn't take the whole server down
+// with them. The direct bridge keeps working either way.
+if (RELAY_CONFIG.enabled) {
+  const gateway = createRelayGateway(RELAY_CONFIG);
+  setRelayGateway(gateway);
+  gateway.start().catch((err) => {
+    log(`ERROR: relay gateway failed to start: ${err?.message || err}`);
+    log("Relayed clients are unavailable; the direct bridge is unaffected.");
+    setRelayGateway(null);
+  });
+} else {
+  log("Relay gateway OFF (set FOUNDRY_RELAY_ENABLED=1 to reach remote clients).");
+}
 
 // ---------------------------------------------------------------------------
 // HTTP / MCP server — stateful session management so multiple clients work
@@ -103,7 +127,7 @@ if (BRIDGE_TOKEN) {
     const auth = req.headers.authorization ?? "";
     const m = /^Bearer\s+(.+)$/i.exec(auth);
     if (!m || m[1] !== BRIDGE_TOKEN) {
-      res.status(401).json({ error: "Invalid or missing bearer token" });
+      res.status(401).json({ error: "Invalid or missing bearer token", code: "FML-0004" });
       return;
     }
     next();
@@ -127,7 +151,7 @@ app.get("/api/usage", (req, res) => {
     const auth = req.headers.authorization ?? "";
     const m = /^Bearer\s+(.+)$/i.exec(auth);
     if (!m || m[1] !== BRIDGE_TOKEN) {
-      res.status(401).json({ error: "Invalid or missing bearer token" });
+      res.status(401).json({ error: "Invalid or missing bearer token", code: "FML-0004" });
       return;
     }
   }

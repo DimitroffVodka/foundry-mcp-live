@@ -4,7 +4,7 @@
  * rather than persisted data.
  */
 import { z }                  from "zod";
-import { registerRoutedTool, registerRawTool, TARGET_USER_DESC } from "./_helpers.js";
+import { registerRoutedTool, registerRawTool, registerMergedTool, TARGET_USER_DESC } from "./_helpers.js";
 import { ALLOW_EVAL }          from "../lib/config.js";
 import { callFoundry }         from "../lib/foundry-rpc.js";
 
@@ -43,8 +43,8 @@ export function registerRuntimeTools(mcp) {
   if (ALLOW_EVAL) {
     registerRawTool(mcp, "evaluate",
       "LAST-RESORT power tool — prefer a dedicated tool when one exists. The "
-      + "dedicated tools (e.g. `apply_damage`, `move_token`, `use_item`, "
-      + "`create_token`, `actor_write`, `combat`) encode system correctness "
+      + "dedicated tools (e.g. `apply_damage`, `token`, `use_item`, "
+      + "`actor_write`, `combat`) encode system correctness "
       + "(HP clamping, wall-aware movement, attack/crit logic) and carry "
       + "audit/undo that hand-written JS skips — reaching for `evaluate` first "
       + "tends to produce wrong state. Use this only when no dedicated tool fits.\n\n"
@@ -94,30 +94,25 @@ export function registerRuntimeTools(mcp) {
       createJobResultHandler());
   }
 
-  // --- DOM interaction ---
-  registerRoutedTool(mcp, "click",
-    "Simulate a player clicking a DOM element — character sheet button, chat card action " +
-    "button, or any visible app window button (including DialogV2 prompts if you can target the " +
-    "dialog's selector). Use this for attack/damage/feature buttons that only work through the " +
-    "sheet's real dispatch path. Combine with `rig` to force dice results. Captures any chat " +
-    "messages created during the click. For DialogV2 dialogs without a stable selector, prefer " +
-    "`simulate_dialog_response` which finds the topmost dialog and clicks by label/index.",
+  // --- Interact (merged: click / simulate_dialog_response) ---
+  registerMergedTool(mcp, "interact",
+    "Simulate user interactions with the live UI. "
+    + "action 'click' — click a DOM element by CSS selector (character-sheet buttons, chat-card "
+    + "actions, any app button including Dialogs with stable selectors); renders an actor sheet "
+    + "first via openActor; combines with rig to force dice results; captures chat messages "
+    + "created during the click. "
+    + "action 'dialog' — click a button on the topmost open DialogV2 by label (contains, "
+    + "case-insensitive) or zero-based index — the fallback when a dialog has no stable selector.",
     {
-      selector:  z.string().describe("CSS selector for the element to click, e.g. '[data-action=\"vce-bless-mode\"][data-mode=\"allies\"]', or 'dialog button.dialog-button[data-action=\"yes\"]'."),
-      rig:       z.array(z.number()).optional().describe("Forced face values for dice rolled during the click."),
-      openActor: z.string().optional().describe("If set, render this actor's sheet first so its buttons exist in the DOM."),
-      waitMs:    z.number().optional().describe("Milliseconds to wait for async chat messages after the click. Default 400."),
-    });
-
-  registerRoutedTool(mcp, "simulate_dialog_response",
-    "Click a button on the topmost open DialogV2 dialog. Use after a tool action " +
-    "that opens a confirmation/options dialog (spell cast options, talent cast " +
-    "config, alchemy cookbook prompts, the dialog-helpers `confirmDialog` / " +
-    "`waitDialog` wrappers). Match by `label` (button text contains, case-insensitive) " +
-    "or `index` (zero-based position in the dialog's button row). Returns the " +
-    "dialog title and the clicked button's resolved label.",
-    {
-      label: z.string().optional().describe("Match the first button whose visible text contains this string (case-insensitive). Mutually exclusive with `index`."),
-      index: z.number().optional().describe("Zero-based index of the button to click. Use when multiple buttons share text or label match is ambiguous."),
-    });
+      action:   z.enum(["click", "dialog"]).describe("Interaction type."),
+      selector: z.string().optional().describe("[click] CSS selector of the element to click, e.g. '[data-action=\"vce-bless-mode\"]' or 'dialog button.dialog-button[data-action=\"yes\"]'."),
+      rig:      z.array(z.number()).optional().describe("[click] Forced face values for dice rolled during the click."),
+      openActor:z.string().optional().describe("[click] If set, render this actor's sheet first so its buttons exist in the DOM."),
+      waitMs:   z.number().optional().describe("[click] Milliseconds to wait for async chat messages after the click. Default 400."),
+      label:    z.string().optional().describe("[dialog] Match the first button whose visible text contains this (case-insensitive). Mutually exclusive with index."),
+      index:    z.number().optional().describe("[dialog] Zero-based button index. Use when labels are ambiguous."),
+    },
+    { click: "click", dialog: "simulate_dialog_response" },
+    "action",
+    { click: ["selector"], dialog: [] });
 }

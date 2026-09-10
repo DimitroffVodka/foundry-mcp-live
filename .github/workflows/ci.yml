@@ -1,0 +1,56 @@
+name: CI
+
+# The 20 test files under server/test/ ran on nobody's machine but the
+# author's until this existed. `npm test` is `node --test test/*.test.js` —
+# no framework, no config, so there is nothing here but install and run.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # Pinned to the version the module is developed on. A green check against
+    # a Node the author never runs proves less than nothing.
+    strategy:
+      matrix:
+        node: ['22', '24']
+    name: Node ${{ matrix.node }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install
+        run: npm ci
+        working-directory: server
+
+      - name: Test
+        run: npm test
+        working-directory: server
+
+      # module/ ships as-is to Foundry (no build step), so the only thing that
+      # can be statically wrong is a syntax error in a file Foundry will load.
+      - name: Parse-check the module sources
+        run: |
+          for f in module/scripts/*.js module/lib/audit.js; do
+            node --check "$f" || exit 1
+          done
+
+      - name: Manifest is valid JSON and matches the server version
+        run: |
+          MODULE_VERSION=$(jq -r .version module/module.json)
+          SERVER_VERSION=$(jq -r .version server/package.json)
+          echo "module.json: $MODULE_VERSION / server package.json: $SERVER_VERSION"
+          if [ "$MODULE_VERSION" != "$SERVER_VERSION" ]; then
+            echo "::error::module.json ($MODULE_VERSION) and server/package.json ($SERVER_VERSION) disagree"
+            exit 1
+          fi

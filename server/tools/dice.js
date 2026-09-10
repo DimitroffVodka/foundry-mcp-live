@@ -18,14 +18,18 @@ export function registerDiceTools(mcp) {
 
   registerRoutedTool(mcp, "use_item",
     "Trigger an item on an actor (weapon, spell, feature) and return the resulting chat " +
-    "messages with full roll breakdowns. Use `rig` to force dice results for deterministic " +
-    "pass/fail testing. Many system-specific methods (rollAttack, rollDamage) need sheet " +
-    "context and fail here — prefer `click` for those.",
+    "card as messages with full roll breakdowns. Use `rig` to force dice results for " +
+    "deterministic pass/fail testing. For systems where the roll lives on the actor data " +
+    "model (e.g. Shadowdark weapons → actor.system.rollAttack), this auto-routes to the " +
+    "system's native method and returns its authentic card. For structured " +
+    "attack->hit->damage->apply results use `request` with action `itemUse` instead (d20-style systems " +
+    "+ Shadowdark NPCs).",
     {
       actor:  z.string().describe("Actor id or name."),
       item:   z.string().describe("Item id or name on that actor."),
       rig:    z.array(z.number()).optional().describe("Forced face values for dice that roll during the use."),
-      method: z.string().optional().describe("Override the item method to call. Default: 'use' or 'roll'."),
+      method: z.string().optional().describe("Override the item method to call. Default: 'use' or 'roll'. Disables the system auto-route."),
+      attackType: z.enum(["melee", "ranged"]).optional().describe("Shadowdark weapons only: force the attack ability — 'melee' (STR) or 'ranged' (DEX, e.g. throwing a thrown weapon). Default uses the weapon's own type."),
       audit:  z.boolean().optional().describe(AUDIT_DESC),
     });
 }

@@ -4,6 +4,234 @@ All notable changes to Foundry MCP Live are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **CI that actually runs the tests.** `.github/workflows/ci.yml` runs the
+  `server/test/` suite on push and PR across Node 22 and 24, parse-checks every
+  file in `module/scripts/` (they ship to Foundry unbuilt, so a syntax error is
+  the only thing that can be statically wrong), and fails if `module.json` and
+  `server/package.json` disagree on the version. The suite existed; nothing ran
+  it but the author's machine.
+- **`LICENSE`.** `module.json` and the README both claimed MIT with no licence
+  file in the repo to grant it.
+- **Error catalogue for setup failures.** `server/lib/errors.js` defines five
+  stable codes (`FML-0001`…`FML-0005`) covering no-GM-bridge, no-bridge-for-user,
+  the write gate, bearer-token rejection, and relaunch misconfiguration, each
+  with a fix documented in [docs/errors.md](docs/errors.md). Deliberately not a
+  general taxonomy — the other ~240 throw sites are internal invariants. The
+  codes are for the failures an operator (or the LLM on the other end) has to
+  act on, and `test/error-codes.test.js` fails the build if a code and its docs
+  section drift apart.
+- **End-to-end smoke test against a live Foundry.** `server/e2e/foundry-smoke.mjs`
+  joins a real world in a real browser, drives `get_game_info` through the full
+  MCP → bridge → game-API chain, and gates on `get_console_errors`: any console
+  error naming this module fails the run. That gate is the point — a v14 API
+  that moved namespace does not throw, it logs, and the mocked unit suite stays
+  green while the module is broken in every real world. Run it with
+  `npm run e2e`, which needs no licence key, no secrets and no container.
+  `.github/workflows/e2e.yml` wires the same test up for CI, but stays
+  `workflow_dispatch`-only because it needs Foundry credentials as repo secrets.
+
+### Fixed
+
+- **`relaunch_client` and the relay gateway were broken on Foundry v14.**
+  v14.367 replaced the join page's user `<select>` with a free-text
+  `input[name="username"]`; `#join-game-form`, the password field and the
+  submit button are unchanged. `client-relauncher.js` waited on
+  `select[name="userid"]`, which on v14 never appears — so every relaunch hung
+  until timeout — and `relay-gateway.js` silently submitted the form with no
+  user set, landing back on `/join` and reporting what looked like a timeout.
+  Both now probe for the dropdown and fall back to typing the username, so v13
+  and v14 both work.
+
+  Found by the new live smoke test on its first honest run. The unit test could
+  not have caught it: `client-relauncher.test.js` asserted the v13 selector
+  against a mock that returned whatever it was told, so it stayed green for
+  months while the feature did not work on the version `module.json` claims
+  `verified: 14`. That test now covers both join shapes, and asserts the
+  relauncher waits for the *form* rather than for a dropdown v14 never renders.
+
+  The same stale selector was carried by three more join paths, now fixed the
+  same way: `auto-join-gm.mjs`, `auto-join-observer.mjs` (both drive the join
+  over CDP) and `prototypes/relay-e2e.mjs`. `relay-e2e.mjs` also anchors on
+  `form#join-game-form` before falling back to the first form on the page —
+  the join screen has two.
+
+### Changed
+
+- **`npm run e2e` runs the whole thing locally, with no key and no secrets.**
+  `server/e2e/run-local.mjs` stands up a second Foundry from the install you
+  already have — its own port, its own dataPath, the fixture world — joins it
+  in a real browser, drives a tool call through MCP → bridge → game API, and
+  tears it down. It reuses the licence already activated on that install, so
+  there is no second key, no credentials and no container. The running game is
+  untouched: different port, different data directory, different world. The
+  MCP server does need to be up, since the bridge is what is under test.
+- **The E2E *workflow* is manual-only.** It needs Foundry credentials as repo
+  secrets, and until those exist it can only fail — a check that is permanently
+  red on `main` is one everyone learns to ignore. It stays as
+  `workflow_dispatch` for whoever wants it in CI; `npm run e2e` is the path
+  that needs nothing.
+- **The E2E fixture world.** `server/e2e/fixtures/worlds/mcp-smoke` is a
+  `world.json` plus a seeded settings record, and nothing else. It is
+  deliberately not a copy of a real
+  world: a real one carries world-level compendium packs (third-party module
+  content), scene thumbnails generated from copyrighted maps, and its owner's
+  journals, chat and accounts. The fixture keeps the *shape* a real Shadowdark
+  v14 world declares and none of the content; Foundry initialises the empty
+  collections and seeds a default Gamemaster on first launch, which is the
+  account the smoke test joins as. The seeded settings record exists because a
+  virgin world has every module disabled, so without it no bridge would ever
+  connect. The workflow installs the `shadowdark` system from its public,
+  pinned GitHub release and launches the world with `FOUNDRY_WORLD`.
+- **The smoke test routes its calls to its own client, and proves it.** Two
+  separate ways it was green for the wrong reason: it matched a bridge by
+  username alone, so a developer's own open world (which also has a
+  "Gamemaster") satisfied it; and it then made unrouted tool calls, which the
+  server resolves by user name — so `get_game_info` was answered by that other
+  world entirely, and the console gate was reading that other world's console.
+  It now matches on host as well as name, passes the matched bridge's
+  `targetUser` on every call, and asserts the world it gets back is the one
+  `/api/status` reports for the Foundry it joined. In CI, with a single
+  Foundry, all three would have passed regardless — which is precisely what
+  made it worth fixing.
+- **`SECURITY.md` now states what leaves the machine.** New "What leaves your
+  machine" section: the module makes no outbound requests at all, the server
+  makes three (Foundry `/api/status`, local CDP, npm at install time), and the
+  usage-telemetry JSONL can contain argument previews of world data — which is
+  why it is local and gitignored, and the first file to check before attaching
+  a debug bundle to an issue.
+
+- **Merged 54 tools down to ~32 with action-discriminator tools (2026-08-19
+  merge pass).** `list` (actors/scenes/modules/tables/compendiums),
+  `document` (actor/item/compendium/actorItems), `chat` (send/read),
+  `scene_read` (summary/placeables), `token` (details/move/create/update/
+  delete/toggleCondition/target/setLevel), `request` (roll/check/itemUse),
+  `trace` (hooks/socket/workflow), `snapshot` (take/diff), `interact`
+  (click/dialog). `place_measured_template` cut (v14 templates are Regions;
+  reachable via `evaluate`). Bridge handlers unchanged — all merges are
+  server-side routing. Also fixed a latent gating bug: `list_scenes` was
+  registered in both `canvas.js` and the write-gated `world-authoring.js`
+  (the gated one won), so scene listing required `FOUNDRY_MCP_ALLOW_WRITE=1`.
+  Behavior notes: `token` create is now ungated like its sibling token
+  mutations (the per-world read-only toggle still guards it);
+  `chat` send is write-gated at call time; the per-routed-tool `targetUser`
+  description was shortened (~40 tools × ~250 bytes saved).
+
+### Removed
+
+- **Deleted 14 low-use tools (68 → 54 registered) to cut per-request schema
+  context.** Telemetry (13.7k calls, Jun 24–Aug 18) showed these accounted for
+  ~25 calls combined: `folder`, `scene_level`, `get_macro`, `list_macros` (zero
+  uses) and `get_active_effects`, `get_selected_token`,
+  `list_region_behavior_types`, `actor_ownership`, `get_scene_levels`,
+  `actor_items`, `list_items`, `list_journals`, `journal`, `region` (1–8 uses).
+  Their operations remain reachable via `evaluate`
+  (`FOUNDRY_MCP_ALLOW_EVAL=1` is on in this deployment); the module-side
+  bridge handlers are unchanged. TOOLS.md, AGENTS.md, and the docs test
+  fixture updated to match.
+
+### Fixed
+
+- **v14 deprecation errors when placing/reading measured templates.** Foundry
+  v14 merged `MeasuredTemplateDocument` into the Region document, and every
+  legacy `MeasuredTemplate` embedded-document operation logged three
+  deprecation errors in the console (MeasuredTemplateDocument,
+  `CONST.MEASURED_TEMPLATE_TYPES`, `Scene#templates`). `place_measured_template`
+  now creates templates the v14-native way (a Region flagged
+  `flags.core.MeasuredTemplate`, built through core's own
+  `BaseRegion._migrateMeasuredTemplateData`), and `get_scene_placeables`
+  reads them back from the Region collection. v13 and below keep the legacy
+  collection path. Tool parameters and return shapes are unchanged. (The
+  migration's `gridTemplates`/`coneTemplateType` inputs are themselves
+  deprecated settings in v14, so the tool uses the migration defaults, which
+  match core's.)
+
+## [0.19.0-beta.3] - 2026-08-13
+
+### Fixed
+
+- **Gateway key rotation orphaned every open client.** The gateway mints a new
+  keypair on each server restart; clients only loaded the public key when they
+  had none, so any client open across a restart kept verifying against the old
+  one and silently rejected everything. It carried on heartbeating, so the
+  directory reported it healthy while every call to it timed out — which is
+  what a whole afternoon of "the device is connected but does not answer"
+  actually was. Clients now re-read the published key on a verification failure
+  before concluding forgery.
+- **The gateway reported itself running after losing its Foundry session.**
+  Foundry evicts a user's older session when that user signs in elsewhere,
+  sending the gateway page back to the join screen while its Chromium process
+  lives on. It now checks for its relay before each use and rejoins itself
+  instead of requiring a server restart.
+- **The relay directory served stale data on a failed read**, so devices that
+  had joined stayed invisible and departed ones looked present. A read failure
+  is now reported rather than hidden behind the last good snapshot.
+- **Direct bridge is preferred over the relay** when both can reach a target.
+  The relay applies its own gates, so silently routing through it changed which
+  rules applied to a call.
+- **Devices are identified by physical pixels**, not CSS pixels. A Steam Deck at
+  devicePixelRatio 0.8 reports 1600x1000 for its 1280x800 panel, so a real Deck
+  was labelled a desktop.
+
+### Added
+
+- **Relayed clients announce themselves.** The direct bridge pops a toast on
+  connect; the relay showed nothing, so a device that can only ever be relayed
+  gave no sign it was working. It now says so on load, and warns distinctly
+  when no gateway is running for the world.
+
+## [0.19.0-beta.2] - 2026-08-13
+
+### Fixed
+
+- **Released manifests pointed installers at the wrong version.** `download`
+  (and, for a pre-release, `manifest`) were left pointing at
+  `releases/latest`. Installing 0.19.0-beta.1 therefore made Foundry fetch the
+  *stable* zip and install 0.18.0 — no error, because the manifest genuinely
+  told it to. The release workflow now pins `download` to the tag's own asset,
+  and pins `manifest` too for pre-releases so a beta cannot resolve itself back
+  to an older stable.
+
+## [0.19.0-beta.1] - 2026-08-13
+
+Pre-release. Published as a GitHub pre-release so it stays out of
+`releases/latest` and cannot offer itself as an update to anyone on stable.
+Install deliberately from its own manifest URL.
+
+### Added
+
+- **Foundry-mediated relay: reach clients the MCP server cannot dial.** The
+  direct bridge requires every execution target to be a network peer of the
+  server, which a remote device can never be — an https page cannot open
+  `ws://` to a private IP, and `localhost` on that device means that device.
+  A managed gateway browser on the MCP machine now joins the world as an
+  ordinary client and forwards signed requests over Foundry's own
+  authenticated socket to a target browser, where the existing handlers run
+  unchanged. Nothing is installed on the remote device; no tunnel, no token,
+  no firewall rule. Opt in with `FOUNDRY_RELAY_ENABLED=1`.
+- **Per-tab client identity.** A desktop and a Steam Deck signed in as the
+  same GM share a `userId`, and the direct registry had them silently evict
+  each other. Targets are now addressed by `clientId`, with device labels and
+  capabilities (including `gamepad`) advertised for routing. A bare shared
+  `userName` is refused as ambiguous rather than resolved by guess.
+- **`list_connected_bridges` reports relayed clients** alongside direct ones.
+- **Relayed `evaluate` is refused** unless a world setting permits it. In a
+  relay the receiving browser is the security boundary, not the server, so the
+  server's env gate no longer covers that path.
+
+### Security
+
+- Requests are ECDSA-signed and verified against a public key published in a
+  world setting — a trustworthy channel precisely because Foundry only lets
+  GMs write those. Results are sealed with ECDH+AES-GCM, so a broadcast
+  namespace where every client sees every packet cannot leak one client's
+  screenshots to another. Keys live in the Node process, never in the gateway
+  browser, which runs unattended.
+- **Known gap:** per-client keys (GM device pairing) are not implemented, so a
+  malicious authenticated client can still forge a *reply*. Not fit for
+  worlds with untrusted players until that lands.
+
 ### Fixed
 
 - **`wss://` bridge URLs no longer get port 3001 appended.** A page served over

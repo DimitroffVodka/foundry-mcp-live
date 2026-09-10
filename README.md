@@ -329,7 +329,8 @@ You should get a 200 with an `mcp-session-id` header.
 | `FOUNDRY_CHROME_USER_DATA_DIR` | empty | Optional dedicated Chrome profile directory for the relaunched client. |
 | `FOUNDRY_RELAUNCH_ALLOW_REMOTE` | `0` | Set to `1` to allow a non-loopback `FOUNDRY_RELAUNCH_URL`. |
 | `FOUNDRY_WS_HOST` | `127.0.0.1` | Interface the bridge WebSocket binds to. Default is loopback. Set `0.0.0.0` to let another device on your LAN connect — see [Connecting a second device](#connecting-a-second-device-on-your-lan). |
-| `FOUNDRY_WS_TOKEN` | (falls back to `BRIDGE_TOKEN`) | Shared secret for the **WebSocket bridge only**. Each browser stores the same value in `localStorage.mcpBridgeToken`. Leaves loopback MCP clients unauthenticated. Use this when you expose the bridge with `FOUNDRY_WS_HOST`. |
+| `FOUNDRY_WS_TOKEN` | (auto-generated when needed) | Shared secret for the **WebSocket bridge only**, required of clients that reach the bridge **from another machine**. A Foundry client on the server's own machine connects without one. You normally don't set this: when the bridge is exposed with `FOUNDRY_WS_HOST`, the server generates a token, saves it to `bridge-token` in its config dir, and a local GM client publishes it into the world so other devices pick it up automatically. Set it explicitly only to choose the value yourself. |
+| `FOUNDRY_WS_ALLOWED_ORIGINS` | (unset) | Extra browser origins that may connect from this machine without a token, comma-separated (`http://foundry.lan:30000`). Loopback origins are already allowed; you need this only when the local client is served under a non-loopback name, e.g. through an SSH tunnel or a hosts-file alias. |
 | `BRIDGE_TOKEN` | (unset) | Shared secret for **both** the bridge and the MCP HTTP endpoint. If set, all MCP HTTP requests must send `Authorization: Bearer <token>`. See [SECURITY.md](SECURITY.md). |
 
 ## Connecting a second device on your LAN
@@ -392,6 +393,33 @@ Clients can still override with `localStorage.setItem("mcpBridgeToken", "…")` 
 - Tool-usage telemetry is on by default and fully local. `GET /api/usage` returns the live per-tool aggregate (counts, error rate, avg duration, first/last used); the JSONL log records one rich line per call for offline analysis. Both are gated by the same `BRIDGE_TOKEN` as `/mcp` when one is set. Disable with `FOUNDRY_MCP_USAGE=0`.
 - See [SECURITY.md](SECURITY.md) for the threat model and opt-in auth.
 
+## Testing
+
+```bash
+cd server
+npm test      # unit suite (node --test), no Foundry needed
+npm run e2e   # end-to-end against a real Foundry
+```
+
+`npm run e2e` stands up a **second** Foundry from your existing install — its
+own port (30002), its own data directory, and a throwaway fixture world — then
+joins it in a real browser and drives a tool call through the whole chain:
+MCP → bridge → game API. It fails on any console error naming this module,
+which is the class of breakage that does not throw and so survives a mocked
+test suite.
+
+It reuses the licence you already activated; there is no second key, no
+credentials, and no container involved. Your running game is untouched —
+different port, different dataPath, different world. The MCP server does need
+to be running, since the bridge is what is under test.
+
+| Env | |
+|---|---|
+| `FOUNDRY_APP` | Foundry's app dir, if not `~/FoundryV14/app` |
+| `FOUNDRY_E2E_PORT` | port for the throwaway instance (default 30002) |
+| `FOUNDRY_CHROME_PATH` | browser binary (default `/usr/bin/chromium`) |
+| `E2E_KEEP=1` | leave it running afterwards to poke at it |
+
 ## Releasing a new version
 
 1. Bump `version` in [module/module.json](module/module.json) and [server/package.json](server/package.json), and refresh both root `version` fields in `server/package-lock.json` (top level and `packages[""]`). `server.js` needs no edit — `SERVER_VERSION` is read from `package.json` at startup. Move the `## [Unreleased]` entries in [CHANGELOG.md](CHANGELOG.md) under a dated `## [x.y.z]` heading.
@@ -400,4 +428,4 @@ Clients can still override with `localStorage.setItem("mcpBridgeToken", "…")` 
 
 ## License
 
-MIT
+[MIT](LICENSE) © DimitroffVodka

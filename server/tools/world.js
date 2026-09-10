@@ -1,12 +1,19 @@
 /**
- * World-state read-only proxy tools — game info, actors, items, modules,
- * compendiums, journals, tables, macros, system data model.
+ * World-state tools — game info, merged list/document/chat surfaces,
+ * compendium search, data model, combat read, settings, debug snapshot,
+ * module API bridge.
  *
- * All tools here proxy 1:1 to bridge-side handlers; each is a thin schema
- * + description wrapper.
+ * Merged surfaces (2026-08-19 reduction):
+ *   - `list`     — list_actors / list_scenes / list_modules / list_tables / list_compendiums
+ *   - `document` — get_actor / get_item / get_compendium_document / get_actor_items
+ *   - `chat`     — send_chat_message / get_chat_messages (send is write-gated at call time)
  */
-import { z }                  from "zod";
-import { registerRoutedTool } from "./_helpers.js";
+import { z }                                                       from "zod";
+import { registerRoutedTool, registerRawTool, registerMergedTool,
+         TARGET_USER_DESC, AUDIT_DESC }                            from "./_helpers.js";
+import { ALLOW_WRITE }                                             from "../lib/config.js";
+import { codedMessage }                                            from "../lib/errors.js";
+import { callFoundry }                                             from "../lib/foundry-rpc.js";
 
 export function registerWorldTools(mcp) {
   // --- Game info ---
@@ -14,64 +21,83 @@ export function registerWorldTools(mcp) {
     "Get basic info about the running Foundry VTT instance: game system, world, version, connected users.",
     {});
 
-  // --- Actors ---
-  registerRoutedTool(mcp, "list_actors",
-    "List all actors in the world. Optionally filter by type or folder name.",
+  // --- List (merged) ---
+  registerMergedTool(mcp, "list",
+    "List world collections. `type` picks the collection: "
+    + "actor (optionally filter by actor subtype via `filter` or folder name via `folder`), "
+    + "scene (every scene as {id,name,active,folder}), "
+    + "module (installed modules; `activeOnly` default true), "
+    + "rollTable (tables with formulas and result counts), "
+    + "compendium (packs with metadata; optional document-type `filter`).",
     {
-      type:   z.string().optional().describe("Filter by actor type (e.g. 'character', 'npc')"),
-      folder: z.string().optional().describe("Filter by folder name"),
+      type:       z.enum(["actor", "scene", "module", "rollTable", "compendium"]).describe("Collection to list."),
+      filter:     z.string().optional().describe("[actor] Actor subtype (e.g. 'character', 'npc'). [compendium] Document type (e.g. 'Actor', 'Item')."),
+      folder:     z.string().optional().describe("[actor] Filter by folder name."),
+      activeOnly: z.boolean().optional().describe("[module] Include inactive modules if false. Default true."),
+    },
+    { actor: "list_actors", scene: "list_scenes", module: "list_modules",
+      rollTable: "list_tables", compendium: "list_compendiums" },
+    "type",
+    {});
+
+  // --- Document (merged) ---
+  registerMergedTool(mcp, "document",
+    "Read one document. `action` picks the kind: "
+    + "actor — full actor data by `id` or exact `name`; "
+    + "item — full world item by `id` or `name`; "
+    + "compendium — one document from a pack (`pack` + `id`/`name`); "
+    + "actorItems — focused {id,name,type,img,system} list of an actor's embedded items "
+    + "(`actorId`; optional item-type `filter`) — much smaller than a full actor read.",
+    {
+      action:  z.enum(["actor", "item", "compendium", "actorItems"]).describe("Document kind."),
+      id:      z.string().optional().describe("[actor/item/compendium] Document ID."),
+      name:    z.string().optional().describe("[actor/item/compendium] Exact name (case-insensitive for compendium)."),
+      pack:    z.string().optional().describe("[compendium] Pack ID (e.g. 'vagabond.monsters')."),
+      actorId: z.string().optional().describe("[actorItems] Actor document id or exact name."),
+      filter:  z.string().optional().describe("[actorItems] Item type filter (e.g. 'weapon', 'spell')."),
+    },
+    { actor: "get_actor", item: "get_item", compendium: "get_compendium_document", actorItems: "get_actor_items" },
+    "action",
+    { compendium: ["pack"], actorItems: ["actorId"] });
+
+  // --- Chat (merged; send is write-gated) ---
+  registerRawTool(mcp, "chat",
+    "Chat log access. action 'send' — post a chat message as the routed user (default GM); "
+    + "optionally speak as actorId/tokenId or whisper via whisperTo. Write-gated: requires "
+    + "FOUNDRY_MCP_ALLOW_WRITE=1 on the server. "
+    + "action 'read' — read chat history with filters limit/since/speaker/includeRolls/includeWhispers.",
+    {
+      action:          z.enum(["send", "read"]).describe("Chat operation."),
+      content:         z.string().optional().describe("[send] HTML content of the message."),
+      speaker:         z.string().optional().describe("[send] Display alias for the speaker. [read] Filter by speaker.alias (actor name) or speaker.actor (actor id)."),
+      actorId:         z.string().optional().describe("[send] Speak as this actor."),
+      tokenId:         z.string().optional().describe("[send] Speak as this token (on the active scene)."),
+      whisperTo:       z.union([z.string(), z.array(z.string())]).optional().describe("[send] User name(s) to whisper to. Other users won't see the message."),
+      type:            z.union([z.enum(["OOC", "IC", "EMOTE", "WHISPER", "ROLL", "OTHER"]), z.number().int()]).optional().describe("[send] Message type. Default 'OOC'."),
+      limit:           z.number().int().min(1).max(500).optional().describe("[read] Max messages to return. Default 50."),
+      since:           z.union([z.string(), z.number()]).optional().describe("[read] Only messages from this point on (ISO timestamp or epoch ms)."),
+      includeRolls:    z.boolean().optional().describe("[read] Include roll messages. Default true."),
+      includeWhispers: z.boolean().optional().describe("[read] Include whispers. Default false."),
+      audit:           z.boolean().optional().describe(AUDIT_DESC),
+      targetUser:      z.string().optional().describe(TARGET_USER_DESC),
+    },
+    async (params) => {
+      const { action, targetUser, ...rest } = params;
+      if (action === "send" && !ALLOW_WRITE) {
+        return { content: [{ type: "text", text: codedMessage("FML-0003",
+          "chat action 'send' requires the server env gate FOUNDRY_MCP_ALLOW_WRITE=1.") }] };
+      }
+      const bridgeTool = action === "send" ? "send_chat_message" : "get_chat_messages";
+      return callFoundry(bridgeTool, rest, targetUser);
     });
 
-  registerRoutedTool(mcp, "get_actor",
-    "Get full actor data by id or name.",
-    {
-      id:   z.string().optional().describe("Actor document ID"),
-      name: z.string().optional().describe("Actor name (exact match)"),
-    });
-
-  registerRoutedTool(mcp, "get_active_effects",
-    "Get all Active Effects on a given actor by id or name.",
-    {
-      id:   z.string().optional().describe("Actor document ID"),
-      name: z.string().optional().describe("Actor name"),
-    });
-
-  // --- Modules ---
-  registerRoutedTool(mcp, "list_modules",
-    "List installed Foundry modules. By default shows only active modules.",
-    { activeOnly: z.boolean().optional().describe("Include inactive modules if false. Default: true") });
-
-  // --- Compendiums ---
-  registerRoutedTool(mcp, "list_compendiums",
-    "List all compendium packs with metadata (label, document type, entry count).",
-    { type: z.string().optional().describe("Filter by document type (e.g. 'Actor', 'Item')") });
-
+  // --- Compendium search ---
   registerRoutedTool(mcp, "search_compendium",
     "Search a compendium pack by text query.",
     {
       pack:  z.string().describe("Pack ID (e.g. 'vagabond.monsters')"),
       query: z.string().optional().describe("Text to search for in entry names"),
       full:  z.boolean().optional().describe("Return full documents if true (max 20)"),
-    });
-
-  registerRoutedTool(mcp, "get_compendium_document",
-    "Get a specific document from a compendium pack by id or name.",
-    {
-      pack: z.string().describe("Pack ID"),
-      id:   z.string().optional().describe("Document ID within the pack"),
-      name: z.string().optional().describe("Document name (case-insensitive)"),
-    });
-
-  // --- Items ---
-  registerRoutedTool(mcp, "list_items",
-    "List world-level items. Optionally filter by type.",
-    { type: z.string().optional().describe("Filter by item type") });
-
-  registerRoutedTool(mcp, "get_item",
-    "Get full item data by id or name.",
-    {
-      id:   z.string().optional().describe("Item document ID"),
-      name: z.string().optional().describe("Item name (exact match)"),
     });
 
   // --- Data model ---
@@ -82,69 +108,12 @@ export function registerWorldTools(mcp) {
       subtype: z.string().optional().describe("Sub-type (e.g. 'character', 'monster')"),
     });
 
-  // --- Journals / Tables / Macros ---
-  registerRoutedTool(mcp, "list_journals",
-    "List journal entries. Optionally filter by folder.",
-    { folder: z.string().optional().describe("Filter by folder name") });
-
-  registerRoutedTool(mcp, "list_tables",
-    "List all roll tables with their formulas and result counts.",
-    {});
-
-  registerRoutedTool(mcp, "list_macros",
-    "List all macros. Shows first 200 chars of each command.",
-    {});
-
-  registerRoutedTool(mcp, "get_macro",
-    "Get full macro data including complete command source.",
-    {
-      id:   z.string().optional().describe("Macro document ID"),
-      name: z.string().optional().describe("Macro name (exact match)"),
-    });
-
   // --- Combat tracker (read) ---
   registerRoutedTool(mcp, "get_combat",
     "Get the state of the active combat encounter — round, current turn, "
     + "and an initiative-sorted combatant list with HP/defeated/hidden flags. "
     + "Returns `{ active: false }` when no combat is running.",
     {});
-
-  // --- Chat history (read) ---
-  registerRoutedTool(mcp, "get_chat_messages",
-    "Read chat history with filters. Returns most recent messages up to "
-    + "`limit`, sorted chronologically. Includes resolved roll formulas and "
-    + "totals when present.",
-    {
-      limit:           z.number().int().min(1).max(500).optional().describe("Max messages to return. Default 50."),
-      since:           z.union([z.string(), z.number()]).optional().describe(
-        "Only return messages from this point on. Accepts an ISO timestamp string or epoch ms."
-      ),
-      speaker:         z.string().optional().describe(
-        "Filter by `speaker.alias` (commonly the actor name) or `speaker.actor` (actor id)."
-      ),
-      includeRolls:    z.boolean().optional().describe("Include roll messages. Default true."),
-      includeWhispers: z.boolean().optional().describe("Include whispers. Default false."),
-    });
-
-  // --- Scene placeables (v0.11) ---
-  registerRoutedTool(mcp, "get_scene_placeables",
-    "List placeables of a given type on a scene. `get_scene` only returns "
-    + "tokens; this exposes the other embedded collections — templates, "
-    + "regions, walls, lights, sounds, drawings, notes, tiles — so the LLM "
-    + "can inspect them without falling back to `evaluate`. Returns full "
-    + "document data (via toObject()) for each item.",
-    {
-      type:    z.enum(["Token", "MeasuredTemplate", "Region", "Wall", "AmbientLight", "AmbientSound", "Drawing", "Note", "Tile"])
-                .optional().describe("Document type. Default 'Token'."),
-      sceneId: z.string().optional().describe("Target scene id. Default: active scene."),
-      select:  z.array(z.string()).optional().describe(
-        "Optional projection — array of dotted field paths to keep (e.g. "
-        + "['_id', 'name', 'behaviors.type']). Drastically reduces payload size "
-        + "when the caller only needs a few fields per item. Array paths map "
-        + "across elements: 'behaviors.type' on a region returns the array of "
-        + "each behavior's type."
-      ),
-    });
 
   // --- Settings (v0.11) ---
   registerRoutedTool(mcp, "get_settings",
@@ -158,16 +127,6 @@ export function registerWorldTools(mcp) {
       key:      z.string().optional().describe("Specific setting key within the namespace."),
     });
 
-  // --- Focused actor item list (v0.11) ---
-  registerRoutedTool(mcp, "get_actor_items",
-    "Focused list of an actor's embedded items, optionally filtered by item "
-    + "type. Returns just `{id, name, type, img, system}` per item — much "
-    + "smaller payload than `get_actor` when you only need to pick one item.",
-    {
-      actorId: z.string().describe("Actor document id or exact name."),
-      type:    z.string().optional().describe("Filter by item type (e.g. 'weapon', 'spell', 'class')."),
-    });
-
   // --- Debug snapshot (v0.12.3) ---
   registerRoutedTool(mcp, "get_debug_snapshot",
     "One-call situational awareness aggregator. Returns game/world/system "
@@ -175,14 +134,6 @@ export function registerWorldTools(mcp) {
     + "recent console errors, recent chat, and the active module list. "
     + "Use this as the default 'what's going on?' tool — replaces 8+ "
     + "individual reads with one round trip during debugging.",
-    {});
-
-  // --- Region behavior type discovery (v0.12.0) ---
-  registerRoutedTool(mcp, "list_region_behavior_types",
-    "Enumerate every registered RegionBehavior subtype and its schema "
-    + "fields. Lets the agent discover what `changeLevel`, `executeScript`, "
-    + "`damageToken`, `defineSurface`, etc. accept without reading the "
-    + "Foundry/system source. Returns `{ types: { <type>: { <field>: <DataField type>, ... } } }`.",
     {});
 
   // --- Module API call (v0.11.1) ---
@@ -200,6 +151,6 @@ export function registerWorldTools(mcp) {
         "Function name on `module.api`. **Omit to discover what's available** — "
         + "returns the full list without calling anything."
       ),
-      args:     z.array(z.any()).optional().describe("Positional args. Default: []."),
+      args:     z.array(z.any()).optional().describe("Positional args. Default: []. "),
     });
 }

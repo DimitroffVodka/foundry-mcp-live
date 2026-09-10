@@ -43,7 +43,7 @@ const TOOLS_MD = readFileSync(fileURLToPath(new URL("../TOOLS.md", import.meta.u
 const DOCUMENTED = documentedTools(TOOLS_MD);
 
 test("tool registrations parse to a plausible set (guards a broken regex)", () => {
-  assert.ok(REGISTERED.size >= 50, `only parsed ${REGISTERED.size} tools — registration regex likely drifted`);
+  assert.ok(REGISTERED.size >= 30, `only parsed ${REGISTERED.size} tools — registration regex likely drifted`);
 });
 
 test("every registered tool has a section in TOOLS.md", () => {

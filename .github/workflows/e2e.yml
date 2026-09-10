@@ -1,0 +1,154 @@
+name: E2E
+
+# Boots a real, licensed Foundry v14, joins a world in a real browser, and
+# drives the bridge end to end. The unit suite runs against a mock, which
+# proves the module calls the right things; only this proves Foundry accepted
+# them. The gate that matters is the console-error one — see e2e/foundry-smoke.mjs.
+#
+# This is not hypothetical: on its first honest run it caught that v14.367
+# replaced the join page's user <select> with a free-text username input,
+# which had silently broken relaunch_client while the mocked unit test stayed
+# green.
+#
+# Deliberately NOT on `pull_request`. The Foundry image needs licence
+# credentials, and GitHub does not hand secrets to a workflow triggered from a
+# fork, so this job would fail on every outside contribution and train everyone
+# to ignore a red check.
+# Manual-only. This needs FOUNDRY_LICENSE_KEY / FOUNDRY_USERNAME /
+# FOUNDRY_PASSWORD as repo secrets, and until those exist it can only fail.
+# A check that is permanently red on main is a check everyone learns to ignore,
+# so it does not run on push. For local runs, which need no secrets and reuse
+# the licence you already activated, use `npm run e2e` instead — see
+# server/e2e/run-local.mjs.
+on:
+  workflow_dispatch: {}
+  # push:
+  #   branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e
+  cancel-in-progress: false
+
+env:
+  # Bump together with server/e2e/fixtures/worlds/mcp-smoke/world.json.
+  SHADOWDARK_VERSION: "4.0.6"
+
+jobs:
+  foundry:
+    name: Foundry v14
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FOUNDRY_LICENSE_KEY: ${{ secrets.FOUNDRY_LICENSE_KEY }}
+      FOUNDRY_USERNAME:    ${{ secrets.FOUNDRY_USERNAME }}
+      FOUNDRY_PASSWORD:    ${{ secrets.FOUNDRY_PASSWORD }}
+      FOUNDRY_E2E_URL:     http://localhost:30000
+      FOUNDRY_E2E_GM_USER: Gamemaster
+      FOUNDRY_CHROME_PATH: /usr/bin/chromium-browser
+    steps:
+      - name: Check the credentials are configured
+        run: |
+          missing=""
+          for name in FOUNDRY_LICENSE_KEY FOUNDRY_USERNAME FOUNDRY_PASSWORD; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing"
+            echo "Set them with: gh secret set <NAME> --repo ${{ github.repository }}"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install server deps
+        run: npm ci
+        working-directory: server
+
+      - name: Install Chromium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium
+          # apt ships it under either name depending on the runner image.
+          command -v chromium-browser || echo "FOUNDRY_CHROME_PATH=$(command -v chromium)" >> "$GITHUB_ENV"
+
+      # Everything Foundry needs is assembled on the host, then mounted at /data.
+      - name: Assemble the Foundry data directory
+        run: |
+          DATA="${{ runner.temp }}/foundry-data/Data"
+          mkdir -p "$DATA/systems" "$DATA/worlds" "$DATA/modules"
+
+          # The system. Public release, no auth. Pinned, so a system release
+          # cannot turn this job red on a morning nobody touched the module.
+          curl -fsSL -o /tmp/shadowdark.zip \
+            "https://github.com/Muttley/foundryvtt-shadowdark/releases/download/release-${SHADOWDARK_VERSION}/shadowdark.zip"
+          mkdir -p "$DATA/systems/shadowdark"
+          unzip -q /tmp/shadowdark.zip -d "$DATA/systems/shadowdark"
+          test -f "$DATA/systems/shadowdark/system.json" \
+            || { echo "::error::shadowdark system.json missing after unzip"; exit 1; }
+
+          # The fixture world. One world.json plus a seeded settings LevelDB
+          # that switches this module on — a virgin world has every module off,
+          # so without it no bridge would ever connect.
+          cp -r server/e2e/fixtures/worlds/mcp-smoke "$DATA/worlds/mcp-smoke"
+
+          # The module under test, straight from the checkout.
+          cp -r module "$DATA/modules/foundry-mcp-live"
+
+          # felddy runs Foundry as its own uid; keep everything readable.
+          chmod -R a+rX "${{ runner.temp }}/foundry-data"
+          find "$DATA" -maxdepth 2 -mindepth 2 | sort
+
+      - name: Start Foundry
+        run: |
+          docker run -d --name foundry \
+            -p 30000:30000 \
+            -v "${{ runner.temp }}/foundry-data:/data" \
+            -e FOUNDRY_LICENSE_KEY="$FOUNDRY_LICENSE_KEY" \
+            -e FOUNDRY_USERNAME="$FOUNDRY_USERNAME" \
+            -e FOUNDRY_PASSWORD="$FOUNDRY_PASSWORD" \
+            -e FOUNDRY_WORLD=mcp-smoke \
+            -e FOUNDRY_MINIFY_STATIC_FILES=true \
+            felddy/foundryvtt:release
+
+          # /api/status answers once the server listens; `active` means the
+          # world actually launched, which is the part FOUNDRY_WORLD does.
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:30000/api/status | grep -q '"active":true'; then
+              echo "world is up"; break
+            fi
+            sleep 5
+          done
+          curl -sf http://localhost:30000/api/status \
+            || { echo "::error::Foundry never came up"; docker logs --tail 100 foundry; exit 1; }
+          curl -sf http://localhost:30000/api/status | grep -q '"active":true' \
+            || { echo "::error::Foundry is up but no world launched"; docker logs --tail 100 foundry; exit 1; }
+
+      - name: Start the MCP server
+        run: |
+          node server.js > "${{ runner.temp }}/mcp-server.log" 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:3000/api/usage >/dev/null && break
+            sleep 1
+          done
+        working-directory: server
+
+      - name: Smoke test
+        run: node e2e/foundry-smoke.mjs
+        working-directory: server
+
+      - name: Logs on failure
+        if: failure()
+        run: |
+          echo "--- MCP server ---"
+          tail -100 "${{ runner.temp }}/mcp-server.log" || true
+          echo "--- Foundry ---"
+          docker logs --tail 200 foundry || true

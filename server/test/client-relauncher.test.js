@@ -64,12 +64,21 @@ test("relaunch returns immediately when the configured GM bridge is connected", 
   assert.equal(launches, 0);
 });
 
-test("relaunch selects the configured user, submits the password, and waits for its bridge", async () => {
+// The join page comes in two shapes. v13 renders a <select> of users; v14.367
+// renders a free-text username input. This mock's `$` decides which the
+// relauncher finds — the previous version of this test hard-coded the v13
+// selector and stayed green for months while relaunch was broken on v14, which
+// is exactly the failure a mock can produce and a real Foundry cannot.
+function makeJoinEnv({ hasUserSelect }) {
   const calls = [];
   const bridges = new Map();
   const page = {
     goto: async (...args) => calls.push(["goto", ...args]),
     waitForSelector: async (...args) => calls.push(["waitForSelector", ...args]),
+    $: async (selector) => {
+      calls.push(["$", selector]);
+      return hasUserSelect ? { handle: selector } : null;
+    },
     $eval: async (selector, callback) => callback({
       options: [
         { textContent: "Player1", value: "player-id", disabled: false },
@@ -107,7 +116,22 @@ test("relaunch selects the configured user, submits the password, and waits for 
       }
     },
   });
+  return { calls, handler };
+}
 
+test("relaunch waits for the join form, not for a user dropdown that v14 does not render", async () => {
+  const { calls, handler } = makeJoinEnv({ hasUserSelect: false });
+  await handler({ timeoutMs: 5_000 });
+
+  assert.deepEqual(
+    calls.find(call => call[0] === "waitForSelector")?.[1],
+    "#join-game-form",
+    "must wait for the form itself — waiting on the v13 <select> hangs on v14"
+  );
+});
+
+test("v13 join: selects the configured user from the dropdown", async () => {
+  const { calls, handler } = makeJoinEnv({ hasUserSelect: true });
   const result = await handler({ timeoutMs: 5_000 });
 
   assert.equal(result.ready, true);
@@ -118,10 +142,8 @@ test("relaunch selects the configured user, submits the password, and waits for 
     '#join-game-form select[name="userid"]',
     "gm-id",
   ]);
-  assert.deepEqual(calls.find(call => call[0] === "type"), [
-    "type",
-    '#join-game-form input[name="password"]',
-    "secret-value",
+  assert.deepEqual(calls.filter(call => call[0] === "type"), [
+    ["type", '#join-game-form input[name="password"]', "secret-value"],
   ]);
   assert.deepEqual(calls.find(call => call[0] === "click"), [
     "click",
@@ -129,6 +151,28 @@ test("relaunch selects the configured user, submits the password, and waits for 
   ]);
   assert.equal(JSON.stringify(result).includes("secret-value"), false);
   assert.equal(JSON.stringify(calls[0]).includes("secret-value"), false);
+});
+
+test("v14 join: types the configured user into the username field", async () => {
+  const { calls, handler } = makeJoinEnv({ hasUserSelect: false });
+  const result = await handler({ timeoutMs: 5_000 });
+
+  assert.equal(result.ready, true);
+  assert.equal(result.targetUser, "Gamemaster@localhost:30000");
+  assert.equal(
+    calls.some(call => call[0] === "select"),
+    false,
+    "must not call page.select on v14 — there is no <select> to select from"
+  );
+  assert.deepEqual(calls.filter(call => call[0] === "type"), [
+    ["type", '#join-game-form input[name="username"]', "Gamemaster"],
+    ["type", '#join-game-form input[name="password"]', "secret-value"],
+  ]);
+  assert.deepEqual(calls.find(call => call[0] === "click"), [
+    "click",
+    '#join-game-form button[name="join"]',
+  ]);
+  assert.equal(JSON.stringify(result).includes("secret-value"), false);
 });
 
 test("relaunch reports invalid configuration without launching Chrome or exposing passwords", async () => {
