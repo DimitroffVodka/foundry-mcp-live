@@ -29,11 +29,20 @@ async function main() {
   // Join as Bridge user
   const result = await wsSend(ws, 'Runtime.evaluate', {
     expression: `(async () => {
+      // v13 renders a user dropdown; v14.367 renders a free-text username input.
       const select = document.querySelector("select[name=userid]");
-      if (!select) return { error: "no user select" };
-      const bridgeOpt = [...select.options].find(o => o.textContent.trim() === "Bridge");
-      if (!bridgeOpt) return { error: "Bridge not found", users: [...select.options].map(o => o.textContent.trim()) };
-      select.value = bridgeOpt.value;
+      if (select) {
+        const bridgeOpt = [...select.options].find(o => o.textContent.trim() === "Bridge");
+        if (!bridgeOpt) return { error: "Bridge not found", users: [...select.options].map(o => o.textContent.trim()) };
+        select.value = bridgeOpt.value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      } else {
+        const nameInput = document.querySelector("input[name=username], input[name=userid]");
+        if (!nameInput) return { error: "no user select and no username input" };
+        nameInput.value = "Bridge";
+        nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+        nameInput.dispatchEvent(new Event("change", { bubbles: true }));
+      }
       document.querySelector("button[name=join]")?.click();
       await new Promise(r => setTimeout(r, 3000));
       return { joined: true, url: location.href };

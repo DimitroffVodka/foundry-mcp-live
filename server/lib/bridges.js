@@ -18,6 +18,7 @@
  */
 import { WebSocketServer } from "ws";
 import { WS_PORT, WS_HOST, WS_HOST_IS_LOOPBACK, WS_ALLOWED_ORIGINS, HELLO_DEADLINE_MS, HEARTBEAT_INTERVAL_MS, WS_TOKEN, WS_TOKEN_NOTICES, SERVER_VERSION, SERVER_ROOT, PROTOCOL_VERSION } from "./config.js";
+import { codedError } from "./errors.js";
 import { log }                        from "./log.js";
 import { pendingRequests }            from "./foundry-rpc.js";
 
@@ -54,7 +55,7 @@ export function routeBridge(targetUser) {
     }
     const legacy = bridges.get("__legacy__");
     if (legacy?.isGM) return legacy;
-    throw new Error("No GM bridge connected.");
+    throw codedError("FML-0001", "No GM bridge connected.");
   }
   // 1. Exact userName match (back-compat, most common).
   // 2. "userName@host" disambiguator.
@@ -73,7 +74,8 @@ export function routeBridge(targetUser) {
   const suffix = hasLegacy
     ? " (a legacy bridge is also connected — upgrade the bridge module to address it by name)"
     : "";
-  throw new Error(
+  throw codedError(
+    "FML-0002",
     `No bridge connected for "${targetUser}". Connected: ${known || "(none)"}.${suffix}`
   );
 }

@@ -24,11 +24,20 @@ async function main() {
   // Select Gamemaster and join
   const result = await wsSend(ws, 'Runtime.evaluate', {
     expression: `(async () => {
+      // v13 renders a user dropdown; v14.367 renders a free-text username input.
       const select = document.querySelector("select[name=userid]");
-      if (!select) return { error: "no user select" };
-      const gm = [...select.options].find(o => o.textContent.trim() === "Gamemaster");
-      if (!gm) return { error: "Gamemaster not found", users: [...select.options].map(o => o.textContent.trim()) };
-      select.value = gm.value;
+      if (select) {
+        const gm = [...select.options].find(o => o.textContent.trim() === "Gamemaster");
+        if (!gm) return { error: "Gamemaster not found", users: [...select.options].map(o => o.textContent.trim()) };
+        select.value = gm.value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      } else {
+        const nameInput = document.querySelector("input[name=username], input[name=userid]");
+        if (!nameInput) return { error: "no user select and no username input" };
+        nameInput.value = "Gamemaster";
+        nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+        nameInput.dispatchEvent(new Event("change", { bubbles: true }));
+      }
       // Fill password if needed
       const pw = document.querySelector("input[name=password]");
       if (pw) pw.value = "";

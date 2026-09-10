@@ -127,7 +127,7 @@ if (BRIDGE_TOKEN) {
     const auth = req.headers.authorization ?? "";
     const m = /^Bearer\s+(.+)$/i.exec(auth);
     if (!m || m[1] !== BRIDGE_TOKEN) {
-      res.status(401).json({ error: "Invalid or missing bearer token" });
+      res.status(401).json({ error: "Invalid or missing bearer token", code: "FML-0004" });
       return;
     }
     next();
@@ -151,7 +151,7 @@ app.get("/api/usage", (req, res) => {
     const auth = req.headers.authorization ?? "";
     const m = /^Bearer\s+(.+)$/i.exec(auth);
     if (!m || m[1] !== BRIDGE_TOKEN) {
-      res.status(401).json({ error: "Invalid or missing bearer token" });
+      res.status(401).json({ error: "Invalid or missing bearer token", code: "FML-0004" });
       return;
     }
   }

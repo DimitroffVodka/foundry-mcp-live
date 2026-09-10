@@ -1,6 +1,12 @@
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const JOIN_FORM = "#join-game-form";
 const USER_SELECT = `${JOIN_FORM} select[name="userid"]`;
+// v14.367 replaced the user <select> with a free-text username input. The form
+// id, the password field and the submit button are all unchanged, so only the
+// user step forks. Probed at join time rather than switched on game version:
+// the version is not known until after the page loads, and probing is cheaper
+// than being wrong.
+const USERNAME_INPUT = `${JOIN_FORM} input[name="username"]`;
 const PASSWORD_INPUT = `${JOIN_FORM} input[name="password"]`;
 const JOIN_BUTTON = `${JOIN_FORM} button[name="join"]`;
 
@@ -106,6 +112,7 @@ export function createRelaunchHandler({
       return {
         ready: false,
         configurationError: true,
+        code: "FML-0005",
         errors: validation.errors,
       };
     }
@@ -157,7 +164,7 @@ export function createRelaunchHandler({
         waitUntil: "domcontentloaded",
         timeout: pageTimeout,
       });
-      await page.waitForSelector(USER_SELECT, { timeout: pageTimeout });
+      await page.waitForSelector(JOIN_FORM, { timeout: pageTimeout });
 
       if (config.headless) {
         // On the /join page (same origin) — seed the client-scoped "disable
@@ -170,24 +177,33 @@ export function createRelaunchHandler({
         } catch { /* page may lack evaluate in tests / hardened pages */ }
       }
 
-      const users = await page.$eval(USER_SELECT, select =>
-        Array.from(select.options).map(option => ({
-          text: option.textContent.trim(),
-          value: option.value,
-          disabled: option.disabled,
-        }))
-      );
-      const gm = users.find(user => user.text === config.gmUser);
-      if (!gm) {
-        throw new Error(`Configured GM user "${config.gmUser}" is not present on the join page`);
-      }
-      if (gm.disabled) {
-        throw new Error(
-          `Configured GM user "${config.gmUser}" is disabled on the join page`
+      // v13 offers a dropdown of users, which lets us validate the configured
+      // name up front. v14 offers a free-text field, where a wrong name can
+      // only fail at submit — the bridge simply never appears and the wait
+      // below times out.
+      const legacySelect = typeof page.$ === "function" ? await page.$(USER_SELECT) : null;
+      if (legacySelect) {
+        const users = await page.$eval(USER_SELECT, select =>
+          Array.from(select.options).map(option => ({
+            text: option.textContent.trim(),
+            value: option.value,
+            disabled: option.disabled,
+          }))
         );
-      }
+        const gm = users.find(user => user.text === config.gmUser);
+        if (!gm) {
+          throw new Error(`Configured GM user "${config.gmUser}" is not present on the join page`);
+        }
+        if (gm.disabled) {
+          throw new Error(
+            `Configured GM user "${config.gmUser}" is disabled on the join page`
+          );
+        }
 
-      await page.select(USER_SELECT, gm.value);
+        await page.select(USER_SELECT, gm.value);
+      } else {
+        await page.type(USERNAME_INPUT, config.gmUser);
+      }
       if (config.gmPassword) {
         await page.type(PASSWORD_INPUT, config.gmPassword);
       }

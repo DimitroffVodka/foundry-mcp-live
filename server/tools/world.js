@@ -12,6 +12,7 @@ import { z }                                                       from "zod";
 import { registerRoutedTool, registerRawTool, registerMergedTool,
          TARGET_USER_DESC, AUDIT_DESC }                            from "./_helpers.js";
 import { ALLOW_WRITE }                                             from "../lib/config.js";
+import { codedMessage }                                            from "../lib/errors.js";
 import { callFoundry }                                             from "../lib/foundry-rpc.js";
 
 export function registerWorldTools(mcp) {
@@ -83,8 +84,8 @@ export function registerWorldTools(mcp) {
     async (params) => {
       const { action, targetUser, ...rest } = params;
       if (action === "send" && !ALLOW_WRITE) {
-        return { content: [{ type: "text", text:
-          "Error: chat action 'send' requires the server env gate FOUNDRY_MCP_ALLOW_WRITE=1." }] };
+        return { content: [{ type: "text", text: codedMessage("FML-0003",
+          "chat action 'send' requires the server env gate FOUNDRY_MCP_ALLOW_WRITE=1.") }] };
       }
       const bridgeTool = action === "send" ? "send_chat_message" : "get_chat_messages";
       return callFoundry(bridgeTool, rest, targetUser);

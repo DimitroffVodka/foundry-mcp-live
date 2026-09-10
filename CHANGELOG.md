@@ -4,7 +4,65 @@ All notable changes to Foundry MCP Live are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **CI that actually runs the tests.** `.github/workflows/ci.yml` runs the
+  `server/test/` suite on push and PR across Node 22 and 24, parse-checks every
+  file in `module/scripts/` (they ship to Foundry unbuilt, so a syntax error is
+  the only thing that can be statically wrong), and fails if `module.json` and
+  `server/package.json` disagree on the version. The suite existed; nothing ran
+  it but the author's machine.
+- **`LICENSE`.** `module.json` and the README both claimed MIT with no licence
+  file in the repo to grant it.
+- **Error catalogue for setup failures.** `server/lib/errors.js` defines five
+  stable codes (`FML-0001`…`FML-0005`) covering no-GM-bridge, no-bridge-for-user,
+  the write gate, bearer-token rejection, and relaunch misconfiguration, each
+  with a fix documented in [docs/errors.md](docs/errors.md). Deliberately not a
+  general taxonomy — the other ~240 throw sites are internal invariants. The
+  codes are for the failures an operator (or the LLM on the other end) has to
+  act on, and `test/error-codes.test.js` fails the build if a code and its docs
+  section drift apart.
+- **End-to-end smoke test against a live Foundry.** `server/e2e/foundry-smoke.mjs`
+  joins a real world in a real browser, drives `get_game_info` through the full
+  MCP → bridge → game-API chain, and gates on `get_console_errors`: any console
+  error naming this module fails the run. That gate is the point — a v14 API
+  that moved namespace does not throw, it logs, and the mocked unit suite stays
+  green while the module is broken in every real world. `.github/workflows/e2e.yml`
+  wires it up but is `workflow_dispatch`-only pending a test-world fixture.
+
+### Fixed
+
+- **`relaunch_client` and the relay gateway were broken on Foundry v14.**
+  v14.367 replaced the join page's user `<select>` with a free-text
+  `input[name="username"]`; `#join-game-form`, the password field and the
+  submit button are unchanged. `client-relauncher.js` waited on
+  `select[name="userid"]`, which on v14 never appears — so every relaunch hung
+  until timeout — and `relay-gateway.js` silently submitted the form with no
+  user set, landing back on `/join` and reporting what looked like a timeout.
+  Both now probe for the dropdown and fall back to typing the username, so v13
+  and v14 both work.
+
+  Found by the new live smoke test on its first honest run. The unit test could
+  not have caught it: `client-relauncher.test.js` asserted the v13 selector
+  against a mock that returned whatever it was told, so it stayed green for
+  months while the feature did not work on the version `module.json` claims
+  `verified: 14`. That test now covers both join shapes, and asserts the
+  relauncher waits for the *form* rather than for a dropdown v14 never renders.
+
+  The same stale selector was carried by three more join paths, now fixed the
+  same way: `auto-join-gm.mjs`, `auto-join-observer.mjs` (both drive the join
+  over CDP) and `prototypes/relay-e2e.mjs`. `relay-e2e.mjs` also anchors on
+  `form#join-game-form` before falling back to the first form on the page —
+  the join screen has two.
+
 ### Changed
+
+- **`SECURITY.md` now states what leaves the machine.** New "What leaves your
+  machine" section: the module makes no outbound requests at all, the server
+  makes three (Foundry `/api/status`, local CDP, npm at install time), and the
+  usage-telemetry JSONL can contain argument previews of world data — which is
+  why it is local and gitignored, and the first file to check before attaching
+  a debug bundle to an issue.
 
 - **Merged 54 tools down to ~32 with action-discriminator tools (2026-08-19
   merge pass).** `list` (actors/scenes/modules/tables/compendiums),

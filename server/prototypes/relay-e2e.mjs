@@ -52,10 +52,20 @@ try {
   const targetPage = await targetBrowser.newPage();
   await targetPage.goto(new URL("/join", FOUNDRY_URL).toString(), { waitUntil: "networkidle2" });
   await targetPage.evaluate((user) => {
-    const form = document.querySelector("form");
+    const form = document.querySelector("form#join-game-form, form");
+    // v13 renders a user dropdown; v14.367 renders a free-text username input.
     const select = form?.querySelector('select[name="userid"], select[name="userId"]');
-    const opt = [...(select?.options ?? [])].find((o) => o.textContent.trim() === user);
-    if (opt) { select.value = opt.value; select.dispatchEvent(new Event("change", { bubbles: true })); }
+    if (select) {
+      const opt = [...select.options].find((o) => o.textContent.trim() === user);
+      if (opt) { select.value = opt.value; select.dispatchEvent(new Event("change", { bubbles: true })); }
+    } else {
+      const nameInput = form?.querySelector('input[name="username"], input[name="userid"]');
+      if (nameInput) {
+        nameInput.value = user;
+        nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+        nameInput.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    }
     form?.querySelector('button[name="join"], button[type="submit"]')?.click();
   }, TARGET_USER);
   await targetPage.waitForFunction(() => globalThis.game?.ready === true, { timeout: 60_000 });

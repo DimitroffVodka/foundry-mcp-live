@@ -401,4 +401,4 @@ Clients can still override with `localStorage.setItem("mcpBridgeToken", "…")` 
 
 ## License
 
-MIT
+[MIT](LICENSE) © DimitroffVodka

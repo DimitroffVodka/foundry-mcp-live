@@ -66,14 +66,26 @@ export function createRelayGateway({
     await page.goto(new URL("/join", foundryUrl).toString(), { waitUntil: "networkidle2" });
 
     const joined = await page.evaluate(async ({ user, pass }) => {
-      const form = document.querySelector("form#join-game, form.join-form, form");
+      const form = document.querySelector("form#join-game-form, form#join-game, form.join-form, form");
       if (!form) return { ok: false, reason: "no-join-form", at: location.href };
+      // v13 shipped a user dropdown; v14.367 ships a free-text username input.
+      // Neither present means the join markup moved again — say so plainly
+      // rather than silently submitting a form with no user set, which lands
+      // back on /join and looks like a timeout.
       const select = form.querySelector('select[name="userid"], select[name="userId"]');
       if (select) {
         const opt = [...select.options].find((o) => o.textContent.trim() === user);
         if (!opt) return { ok: false, reason: `user "${user}" not offered on the join screen` };
         select.value = opt.value;
         select.dispatchEvent(new Event("change", { bubbles: true }));
+      } else {
+        const nameInput = form.querySelector('input[name="username"], input[name="userid"]');
+        if (!nameInput) {
+          return { ok: false, reason: "join form has neither a user select nor a username input" };
+        }
+        nameInput.value = user;
+        nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+        nameInput.dispatchEvent(new Event("change", { bubbles: true }));
       }
       const pw = form.querySelector('input[name="password"]');
       if (pw) pw.value = pass;

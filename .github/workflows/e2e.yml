@@ -1,0 +1,137 @@
+name: E2E
+
+# Boots a real, licensed Foundry v14, joins a world in a real browser, and
+# drives the bridge end to end. The unit suite runs against a mock, which
+# proves the module calls the right things; only this proves Foundry accepted
+# them. The gate that matters is the console-error one — see e2e/foundry-smoke.mjs.
+#
+# Deliberately NOT on `pull_request`. The Foundry image needs licence
+# credentials, and GitHub does not hand secrets to a workflow triggered from a
+# fork, so this job would fail on every outside contribution and train everyone
+# to ignore a red check.
+# Manual-only until the test-world fixture exists (see "Prepare the test world"
+# below). Flip `push` back on the same commit that lands the fixture — a
+# workflow that cannot pass yet has no business being red on every push.
+on:
+  workflow_dispatch: {}
+  # push:
+  #   branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e
+  cancel-in-progress: false
+
+jobs:
+  foundry:
+    name: Foundry v14
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FOUNDRY_LICENSE_KEY: ${{ secrets.FOUNDRY_LICENSE_KEY }}
+      FOUNDRY_USERNAME:    ${{ secrets.FOUNDRY_USERNAME }}
+      FOUNDRY_PASSWORD:    ${{ secrets.FOUNDRY_PASSWORD }}
+      FOUNDRY_E2E_URL:     http://localhost:30000
+      FOUNDRY_E2E_GM_USER: Gamemaster
+      FOUNDRY_CHROME_PATH: /usr/bin/chromium-browser
+    steps:
+      - name: Check the credentials are configured
+        run: |
+          missing=""
+          for name in FOUNDRY_LICENSE_KEY FOUNDRY_USERNAME FOUNDRY_PASSWORD; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing"
+            echo "Set them with: gh secret set <NAME> --repo ${{ github.repository }}"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install server deps
+        run: npm ci
+        working-directory: server
+
+      - name: Install Chromium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium
+          # apt ships it under either name depending on the runner image.
+          command -v chromium-browser || echo "FOUNDRY_CHROME_PATH=$(command -v chromium)" >> "$GITHUB_ENV"
+
+      - name: Start Foundry
+        run: |
+          mkdir -p "${{ runner.temp }}/foundry-data"
+          docker run -d --name foundry \
+            -p 30000:30000 \
+            -v "${{ runner.temp }}/foundry-data:/data" \
+            -e FOUNDRY_LICENSE_KEY="$FOUNDRY_LICENSE_KEY" \
+            -e FOUNDRY_USERNAME="$FOUNDRY_USERNAME" \
+            -e FOUNDRY_PASSWORD="$FOUNDRY_PASSWORD" \
+            -e FOUNDRY_MINIFY_STATIC_FILES=true \
+            felddy/foundryvtt:release
+
+          # /api/status answers as soon as the server is listening.
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:30000/api/status >/dev/null && break
+            sleep 5
+          done
+          curl -sf http://localhost:30000/api/status || { echo "::error::Foundry never came up"; exit 1; }
+
+      - name: Install this module into Foundry
+        run: |
+          MODULE_DIR="${{ runner.temp }}/foundry-data/Data/modules/foundry-mcp-live"
+          sudo mkdir -p "$MODULE_DIR"
+          sudo cp -r module/. "$MODULE_DIR/"
+          sudo chmod -R a+rX "$MODULE_DIR"
+
+      # THE ONE MANUAL STEP. A world must exist, use a system, and have this
+      # module enabled. Foundry's HTTP API cannot create one, so the fixture
+      # has to come from somewhere:
+      #
+      #   a) Create a world locally (any lightweight system — Simple Worldbuilding
+      #      is enough), enable foundry-mcp-live in it, then commit
+      #      `Data/worlds/<id>/` as a fixture and copy it in here; or
+      #   b) Build it once in a `workflow_dispatch` run and restore it from
+      #      actions/cache on subsequent runs.
+      #
+      # Whichever you pick, the world must be set to auto-launch, or add a step
+      # that POSTs to /setup to launch it before the smoke test runs.
+      - name: Prepare the test world
+        run: |
+          WORLDS="${{ runner.temp }}/foundry-data/Data/worlds"
+          if [ ! -d "$WORLDS" ] || [ -z "$(ls -A "$WORLDS" 2>/dev/null)" ]; then
+            echo "::error::No test world fixture — see the comment above this step in e2e.yml"
+            exit 1
+          fi
+          ls -la "$WORLDS"
+
+      - name: Start the MCP server
+        run: |
+          node server.js > "${{ runner.temp }}/mcp-server.log" 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:3000/api/usage >/dev/null && break
+            sleep 1
+          done
+        working-directory: server
+
+      - name: Smoke test
+        run: node e2e/foundry-smoke.mjs
+        working-directory: server
+
+      - name: Logs on failure
+        if: failure()
+        run: |
+          echo "--- MCP server ---"
+          tail -100 "${{ runner.temp }}/mcp-server.log" || true
+          echo "--- Foundry ---"
+          docker logs --tail 200 foundry || true

@@ -35,6 +35,43 @@ Treat the MCP endpoint with the same trust you'd give a logged-in GM browser ses
 - **Client relaunch is opt-in and loopback-only by default.** `relaunch_client` is absent unless `FOUNDRY_RELAUNCH_ENABLED=1`. It rejects credentials embedded in URLs and non-loopback Foundry hosts unless remote use is explicitly enabled.
 - **Vendored dependencies.** `html2canvas` is bundled in `module/lib/`; the module never fetches code from a CDN at runtime.
 
+## What leaves your machine
+
+Nothing. This section exists so you don't have to take that on faith.
+
+**The Foundry module** (`module/`) makes no outbound requests. It opens one
+WebSocket to the bridge — `127.0.0.1:3001` by default, or whatever you set
+`FOUNDRY_WS_HOST`/`FOUNDRY_BRIDGE_URL` to — and talks to nothing else.
+`html2canvas` is vendored in `module/lib/` precisely so no CDN is contacted at
+render time. There is no telemetry, no analytics, no version ping, no
+crash reporter.
+
+**The MCP server** (`server/`) makes exactly three kinds of outbound request,
+all to hosts you configured and all normally loopback:
+
+| What | Where | When |
+|---|---|---|
+| `GET /api/status` | your Foundry URL | relay gateway health check |
+| Chrome DevTools Protocol | the local Chromium it launched | screenshots, recording, relaunch |
+| npm registry | — | `npm install` only, never at runtime |
+
+**What is written to disk, and stays there:**
+
+| File | Contents | Notes |
+|---|---|---|
+| `server/usage-telemetry.jsonl` | One line per tool call: name, ok/error, duration, a truncated args preview, and a truncated `evaluate` body | Local only. Gitignored. On by default — `FOUNDRY_MCP_USAGE=0` disables, `FOUNDRY_MCP_USAGE_LOG=<path>` redirects |
+| `GET /api/usage` | In-memory aggregate (counts, error rates, durations). No args, no eval bodies | Loopback; behind `BRIDGE_TOKEN` when one is set |
+| bridge token store | The generated WebSocket token | Written on first run so you don't have to paste one |
+
+The telemetry log can contain fragments of your world data, because it records
+argument previews. That is why it never leaves the machine and why it is in
+`.gitignore` — but if you are about to attach a debug bundle to an issue,
+that is the file to check first.
+
+**What the AI client sees** is a separate question, and a larger one: any tool
+result you let it read is data you have handed to that client's operator. See
+[Known residual risks](#known-residual-risks).
+
 ## Opt-in: token auth
 
 There are two tokens, because the two endpoints have very different exposure.
