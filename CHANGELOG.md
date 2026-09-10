@@ -27,8 +27,10 @@ All notable changes to Foundry MCP Live are documented in this file.
   MCP → bridge → game-API chain, and gates on `get_console_errors`: any console
   error naming this module fails the run. That gate is the point — a v14 API
   that moved namespace does not throw, it logs, and the mocked unit suite stays
-  green while the module is broken in every real world. `.github/workflows/e2e.yml`
-  wires it up but is `workflow_dispatch`-only pending a test-world fixture.
+  green while the module is broken in every real world. Run it with
+  `npm run e2e`, which needs no licence key, no secrets and no container.
+  `.github/workflows/e2e.yml` wires the same test up for CI, but stays
+  `workflow_dispatch`-only because it needs Foundry credentials as repo secrets.
 
 ### Fixed
 
@@ -57,9 +59,22 @@ All notable changes to Foundry MCP Live are documented in this file.
 
 ### Changed
 
-- **The E2E workflow now has a world to boot, and runs on push.** The fixture
-  is `server/e2e/fixtures/worlds/mcp-smoke` — a `world.json` plus a seeded
-  settings record, and nothing else. It is deliberately not a copy of a real
+- **`npm run e2e` runs the whole thing locally, with no key and no secrets.**
+  `server/e2e/run-local.mjs` stands up a second Foundry from the install you
+  already have — its own port, its own dataPath, the fixture world — joins it
+  in a real browser, drives a tool call through MCP → bridge → game API, and
+  tears it down. It reuses the licence already activated on that install, so
+  there is no second key, no credentials and no container. The running game is
+  untouched: different port, different data directory, different world. The
+  MCP server does need to be up, since the bridge is what is under test.
+- **The E2E *workflow* is manual-only.** It needs Foundry credentials as repo
+  secrets, and until those exist it can only fail — a check that is permanently
+  red on `main` is one everyone learns to ignore. It stays as
+  `workflow_dispatch` for whoever wants it in CI; `npm run e2e` is the path
+  that needs nothing.
+- **The E2E fixture world.** `server/e2e/fixtures/worlds/mcp-smoke` is a
+  `world.json` plus a seeded settings record, and nothing else. It is
+  deliberately not a copy of a real
   world: a real one carries world-level compendium packs (third-party module
   content), scene thumbnails generated from copyrighted maps, and its owner's
   journals, chat and accounts. The fixture keeps the *shape* a real Shadowdark

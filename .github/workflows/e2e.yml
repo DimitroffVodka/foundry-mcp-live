@@ -14,10 +14,16 @@ name: E2E
 # credentials, and GitHub does not hand secrets to a workflow triggered from a
 # fork, so this job would fail on every outside contribution and train everyone
 # to ignore a red check.
+# Manual-only. This needs FOUNDRY_LICENSE_KEY / FOUNDRY_USERNAME /
+# FOUNDRY_PASSWORD as repo secrets, and until those exist it can only fail.
+# A check that is permanently red on main is a check everyone learns to ignore,
+# so it does not run on push. For local runs, which need no secrets and reuse
+# the licence you already activated, use `npm run e2e` instead — see
+# server/e2e/run-local.mjs.
 on:
-  push:
-    branches: [main]
   workflow_dispatch: {}
+  # push:
+  #   branches: [main]
 
 permissions:
   contents: read

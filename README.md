@@ -393,6 +393,33 @@ Clients can still override with `localStorage.setItem("mcpBridgeToken", "…")` 
 - Tool-usage telemetry is on by default and fully local. `GET /api/usage` returns the live per-tool aggregate (counts, error rate, avg duration, first/last used); the JSONL log records one rich line per call for offline analysis. Both are gated by the same `BRIDGE_TOKEN` as `/mcp` when one is set. Disable with `FOUNDRY_MCP_USAGE=0`.
 - See [SECURITY.md](SECURITY.md) for the threat model and opt-in auth.
 
+## Testing
+
+```bash
+cd server
+npm test      # unit suite (node --test), no Foundry needed
+npm run e2e   # end-to-end against a real Foundry
+```
+
+`npm run e2e` stands up a **second** Foundry from your existing install — its
+own port (30002), its own data directory, and a throwaway fixture world — then
+joins it in a real browser and drives a tool call through the whole chain:
+MCP → bridge → game API. It fails on any console error naming this module,
+which is the class of breakage that does not throw and so survives a mocked
+test suite.
+
+It reuses the licence you already activated; there is no second key, no
+credentials, and no container involved. Your running game is untouched —
+different port, different dataPath, different world. The MCP server does need
+to be running, since the bridge is what is under test.
+
+| Env | |
+|---|---|
+| `FOUNDRY_APP` | Foundry's app dir, if not `~/FoundryV14/app` |
+| `FOUNDRY_E2E_PORT` | port for the throwaway instance (default 30002) |
+| `FOUNDRY_CHROME_PATH` | browser binary (default `/usr/bin/chromium`) |
+| `E2E_KEEP=1` | leave it running afterwards to poke at it |
+
 ## Releasing a new version
 
 1. Bump `version` in [module/module.json](module/module.json) and [server/package.json](server/package.json), and refresh both root `version` fields in `server/package-lock.json` (top level and `packages[""]`). `server.js` needs no edit — `SERVER_VERSION` is read from `package.json` at startup. Move the `## [Unreleased]` entries in [CHANGELOG.md](CHANGELOG.md) under a dated `## [x.y.z]` heading.
