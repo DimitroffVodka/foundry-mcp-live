@@ -50,7 +50,7 @@ The server currently exposes ~31 tools. **Do not assume one tool per verb** — 
 - **Tokens:** `token` — one tool, `action` param: move (straight or wall-aware A\* with `pathed: true`), create, update, delete, toggleCondition, target, setLevel.
 - **Player-facing requests:** `request` — action roll (dialog, waits for a human click) / check (system-native check, dialogs suppressed) / itemUse (attack→damage workflow). See Mutation caution.
 
-If a name you remember isn't in `tools/list`, it was probably folded during the 96→67 and 68→54→32 consolidations — check the merged tool's `action` enum rather than guessing the old name.
+If a name you remember isn't in `tools/list`, it was probably folded during the 96→67 and 68→31 consolidations — check the merged tool's `action` enum rather than guessing the old name.
 
 ## Choosing a tool — don't default to `evaluate`
 

@@ -22,7 +22,7 @@ export function registerDiceTools(mcp) {
     "deterministic pass/fail testing. For systems where the roll lives on the actor data " +
     "model (e.g. Shadowdark weapons → actor.system.rollAttack), this auto-routes to the " +
     "system's native method and returns its authentic card. For structured " +
-    "attack->hit->damage->apply results use `request_item_use` instead (d20-style systems " +
+    "attack->hit->damage->apply results use `request` with action `itemUse` instead (d20-style systems " +
     "+ Shadowdark NPCs).",
     {
       actor:  z.string().describe("Actor id or name."),

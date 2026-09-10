@@ -2062,7 +2062,7 @@ const handlers = {
 
       const method = params.method ?? (typeof item.use === "function" ? "use" : "roll");
       if (typeof item[method] !== "function") {
-        return { error: `Item ${item.name} has no ${method}() method. For structured attack/damage rolls use request_item_use (d20-style systems + Shadowdark NPCs); otherwise pass an explicit \`method\`.` };
+        return { error: `Item ${item.name} has no ${method}() method. For structured attack/damage rolls use the \`request\` tool with action \`itemUse\` (d20-style systems + Shadowdark NPCs); otherwise pass an explicit \`method\`.` };
       }
 
       try {

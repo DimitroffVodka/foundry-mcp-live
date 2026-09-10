@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { SERVER_INSTRUCTIONS } from "../lib/server-instructions.js";
+
 // Contract test: the agent-facing docs must never name a tool that doesn't
 // exist. This freezes the manual grep/comm check that caught AGENTS.md drifting
 // to pre-consolidation names — so the next stale reference fails CI instead of
@@ -28,6 +30,7 @@ function registeredTools() {
 // a param/setting and not a dead tool.
 const NON_TOOL_IDENTIFIERS = new Set([
   "action",            // discriminator param on the merged tools
+  "phase",             // request itemUse param
   "pathed",            // move_token param
   "autoaccept",        // request_* param (matched case-insensitively below)
   "autoconnect",       // module setting
@@ -52,7 +55,10 @@ function inlineToolCandidates(md) {
 const REGISTERED = registeredTools();
 
 const DOCS = [
-  { label: "AGENTS.md", path: fileURLToPath(new URL("../../AGENTS.md", import.meta.url)) },
+  { label: "AGENTS.md", text: readFileSync(fileURLToPath(new URL("../../AGENTS.md", import.meta.url)), "utf8"), minKnown: 15 },
+  // The one text a pure MCP client actually reads (sent at initialize) — shorter,
+  // so a lower non-vacuous floor.
+  { label: "server instructions", text: SERVER_INSTRUCTIONS, minKnown: 5 },
   // NOTE: server/TOOLS.md is intentionally excluded until its pending cleanup —
   // it still carries pre-consolidation names. Add it here once it's regenerated.
 ];
@@ -66,15 +72,14 @@ test("tool registrations parse to a plausible set (guards a broken regex)", () =
 
 for (const doc of DOCS) {
   test(`${doc.label} references no tool that doesn't exist`, () => {
-    const md = readFileSync(doc.path, "utf8");
-    const candidates = [...inlineToolCandidates(md)];
+    const candidates = [...inlineToolCandidates(doc.text)];
 
     // Non-vacuous guard: the doc really must mention a healthy number of real
     // tools, otherwise a broken extractor would make the check below pass on
     // an empty set.
     const knownReferenced = candidates.filter((t) => REGISTERED.has(t));
     assert.ok(
-      knownReferenced.length >= 15,
+      knownReferenced.length >= doc.minKnown,
       `${doc.label}: matched only ${knownReferenced.length} real tool references — the inline-code extractor is probably broken`
     );
 
