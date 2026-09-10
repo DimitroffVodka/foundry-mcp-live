@@ -1,0 +1,10 @@
+{
+  "title": "MCP Smoke",
+  "system": "shadowdark",
+  "id": "mcp-smoke",
+  "coreVersion": "14.367",
+  "compatibility": { "minimum": "14", "verified": "14" },
+  "systemVersion": "4.0.6",
+  "description": "Minimal fixture world for the foundry-mcp-live e2e smoke test. Derived from the shape of a real Shadowdark v14 world, with no content: no scenes, no actors, no journals, no chat, and none of the world-level compendium packs, which are third-party module content and not ours to redistribute. Foundry initialises the empty collections on first launch.",
+  "flags": {}
+}

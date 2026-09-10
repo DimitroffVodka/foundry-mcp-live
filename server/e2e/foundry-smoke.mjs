@@ -173,7 +173,12 @@ try {
   // passes on somebody else's already-connected client — including the
   // developer's own browser when this is run locally — which means the check
   // goes green even if the module in the new client never loaded at all.
-  const mine = (list) => list.find((b) => b.userName === GM_USER);
+  // Match on host as well as name. In CI there is one Foundry, but a developer
+  // running this locally has their own world open — very likely with a
+  // "Gamemaster" of its own — and matching on name alone would happily pass by
+  // observing their browser instead of the client this test just launched.
+  const wantHost = new URL(FOUNDRY_URL).host;
+  const mine = (list) => list.find((b) => b.userName === GM_USER && b.host === wantHost);
 
   let list = [];
   const deadline = Date.now() + 30_000;
@@ -189,16 +194,31 @@ try {
       ? `${list.length} bridge(s) total, ours at ${bridge.host ?? "?"}`
       : `${list.length} bridge(s), none for "${GM_USER}": ${list.map((b) => b.userName).join(", ") || "(none)"}`);
 
-  const info = await call("get_game_info");
-  check("get_game_info round-tripped through the live game API",
-    !!info?.world?.id && !!info?.system?.id,
-    `world=${info?.world?.id} system=${info?.system?.id} foundry=${info?.foundryVersion ?? "?"}`);
+  // Route to OUR client explicitly. The server resolves a bare call by user
+  // name, and "Gamemaster" is the default name in every world — so an
+  // unrouted call is answered by whichever Gamemaster the server picks, which
+  // locally is the developer's own open world. The call then succeeds while
+  // describing a completely different game.
+  const route = bridge?.targetUser ? { targetUser: bridge.targetUser } : {};
+
+  // What the Foundry we actually joined says it is running. Comparing tool
+  // output against this is what makes "it answered" mean "it answered from
+  // the right client" — no configuration required.
+  const status = await fetch(new URL("/api/status", FOUNDRY_URL))
+    .then((r) => r.json())
+    .catch(() => ({}));
+
+  const info = await call("get_game_info", route);
+  check("get_game_info answered from the client we joined",
+    !!info?.world?.id && !!info?.system?.id && info.world.id === status.world,
+    `world=${info?.world?.id} (expected ${status.world ?? "?"}) `
+    + `system=${info?.system?.id} foundry=${info?.foundryVersion ?? "?"}`);
 
   // --- The console-error gate ---------------------------------------------
   // The point of the whole exercise. A Foundry API that moved namespace does
   // not throw here — it logs, and the module keeps running wrong. Any console
   // error naming this module fails the build.
-  const console_ = await call("get_console_errors", { sinceMs: 0, level: "error" });
+  const console_ = await call("get_console_errors", { sinceMs: 0, level: "error", ...route });
   const ours = (console_?.entries ?? []).filter((e) =>
     OURS_RE.test(JSON.stringify(e))
   );

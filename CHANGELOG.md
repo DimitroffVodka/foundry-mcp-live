@@ -57,6 +57,29 @@ All notable changes to Foundry MCP Live are documented in this file.
 
 ### Changed
 
+- **The E2E workflow now has a world to boot, and runs on push.** The fixture
+  is `server/e2e/fixtures/worlds/mcp-smoke` — a `world.json` plus a seeded
+  settings record, and nothing else. It is deliberately not a copy of a real
+  world: a real one carries world-level compendium packs (third-party module
+  content), scene thumbnails generated from copyrighted maps, and its owner's
+  journals, chat and accounts. The fixture keeps the *shape* a real Shadowdark
+  v14 world declares and none of the content; Foundry initialises the empty
+  collections and seeds a default Gamemaster on first launch, which is the
+  account the smoke test joins as. The seeded settings record exists because a
+  virgin world has every module disabled, so without it no bridge would ever
+  connect. The workflow installs the `shadowdark` system from its public,
+  pinned GitHub release and launches the world with `FOUNDRY_WORLD`.
+- **The smoke test routes its calls to its own client, and proves it.** Two
+  separate ways it was green for the wrong reason: it matched a bridge by
+  username alone, so a developer's own open world (which also has a
+  "Gamemaster") satisfied it; and it then made unrouted tool calls, which the
+  server resolves by user name — so `get_game_info` was answered by that other
+  world entirely, and the console gate was reading that other world's console.
+  It now matches on host as well as name, passes the matched bridge's
+  `targetUser` on every call, and asserts the world it gets back is the one
+  `/api/status` reports for the Foundry it joined. In CI, with a single
+  Foundry, all three would have passed regardless — which is precisely what
+  made it worth fixing.
 - **`SECURITY.md` now states what leaves the machine.** New "What leaves your
   machine" section: the module makes no outbound requests at all, the server
   makes three (Foundry `/api/status`, local CDP, npm at install time), and the

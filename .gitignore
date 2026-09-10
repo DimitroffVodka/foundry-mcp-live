@@ -13,3 +13,15 @@ scratch/
 # Tool-usage telemetry log (local analysis data; may contain arg/eval previews)
 usage-telemetry.jsonl
 *.jsonl
+
+# LevelDB runtime artefacts in the e2e world fixture. Recreated on every open;
+# only CURRENT, MANIFEST-*, *.ldb and the *.log WAL are data worth committing.
+server/e2e/fixtures/worlds/*/data/*/LOCK
+server/e2e/fixtures/worlds/*/data/*/LOG
+server/e2e/fixtures/worlds/*/data/*/LOG.old
+
+# ...but `*.log` above would also swallow LevelDB's write-ahead log, which is
+# where a freshly seeded record lives until something compacts it into a .ldb.
+# Ignoring it means a regenerated fixture can be committed looking complete and
+# open with zero records. Keep the fixture's WAL.
+!server/e2e/fixtures/worlds/*/data/*/*.log
