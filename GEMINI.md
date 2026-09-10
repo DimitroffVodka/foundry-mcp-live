@@ -70,7 +70,7 @@ Use `httpUrl` (Streamable HTTP), **not** `url` (SSE). If tools don't appear afte
 
 ## What this server exposes
 
-**Tools only.** No MCP resources, no prompts. Don't look for `resources/list` or call `read_resource` — there are none. Use the tools directly: `list_actors`, `get_scene`, `get_actor`, `roll`, etc. See `server/TOOLS.md` for the full list.
+**Tools only.** No MCP resources, no prompts. Don't look for `resources/list` or call `read_resource` — there are none. Use the tools directly: `list`, `document`, `scene_read`, `roll`, etc. See `server/TOOLS.md` for the full list.
 
 ## After configuring
 
@@ -81,7 +81,7 @@ Use `httpUrl` (Streamable HTTP), **not** `url` (SSE). If tools don't appear afte
 
 ## Verifying
 
-Try `list_actors`. If you get results, you're good.
+Try `list` with `type: "actor"`. If you get results, you're good.
 
 If still Disconnected:
 

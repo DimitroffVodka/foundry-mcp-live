@@ -37,6 +37,9 @@ const NON_TOOL_IDENTIFIERS = new Set([
   "allowworldmutations", // module setting
   "nocanvas",          // core setting
   "move_token_pathed", // referenced only to say it was folded into move_token
+  "initialize",        // GEMINI.md: MCP handshake method
+  "url",               // GEMINI.md: Gemini settings key
+  "read_resource",     // GEMINI.md: named only to say there are no resources
 ]);
 
 // Bare snake_case identifiers from INLINE `code` spans only. Fenced ``` blocks
@@ -59,8 +62,9 @@ const DOCS = [
   // The one text a pure MCP client actually reads (sent at initialize) — shorter,
   // so a lower non-vacuous floor.
   { label: "server instructions", text: SERVER_INSTRUCTIONS, minKnown: 5 },
-  // NOTE: server/TOOLS.md is intentionally excluded until its pending cleanup —
-  // it still carries pre-consolidation names. Add it here once it's regenerated.
+  { label: "GEMINI.md", text: readFileSync(fileURLToPath(new URL("../../GEMINI.md", import.meta.url)), "utf8"), minKnown: 3 },
+  // server/TOOLS.md is deliberately excluded: its "Merges the old X" notes name
+  // dead tools on purpose. docs-tool-coverage.test.js guards it instead.
 ];
 
 test("tool registrations parse to a plausible set (guards a broken regex)", () => {
