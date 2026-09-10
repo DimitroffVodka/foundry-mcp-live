@@ -94,3 +94,48 @@ for (const doc of DOCS) {
     );
   });
 }
+
+// Tool and param descriptions are the other text every client reads (via
+// tools/list), so check the exact strings: register the real tool set into a
+// capturing fake. Gates on so gated tools are covered — set before the dynamic
+// import, since lib/config.js reads them once at load.
+for (const gate of ["EVAL", "WRITE", "SELF_TEST"]) process.env[`FOUNDRY_MCP_ALLOW_${gate}`] = "1";
+const { registerTools } = await import("../tools/index.js");
+const TOOLS = [];
+await registerTools({ tool: (name, description, schema) => { TOOLS.push({ name, description, schema }); return {}; } });
+
+// Descriptions routinely backtick their own params (`type`, `rig`) and enum
+// values (`summary`), so every tool's param names and enum values count as
+// known — plus the JS names evaluate's description documents. Caveat: a dead
+// tool whose name is now also a param (`folder`, `region`) can't be caught.
+const DESCRIPTION_KNOWN = new Set(["game", "ui", "return", "await"]);
+const DESCRIPTIONS = [];
+const unwrapOptional = (t) => { while (t?._def?.innerType) t = t._def.innerType; return t; };
+for (const { name, description, schema } of TOOLS) {
+  DESCRIPTIONS.push({ where: name, text: description });
+  for (const [param, type] of Object.entries(schema ?? {})) {
+    DESCRIPTION_KNOWN.add(param);
+    for (const value of unwrapOptional(type)?.options ?? []) DESCRIPTION_KNOWN.add(String(value));
+    if (type.description) DESCRIPTIONS.push({ where: `${name}.${param}`, text: type.description });
+  }
+}
+
+test("tool and param descriptions reference no tool that doesn't exist", () => {
+  assert.ok(TOOLS.length >= 30, `captured only ${TOOLS.length} tools — the registerTools capture is broken`);
+  assert.ok(
+    DESCRIPTIONS.length > TOOLS.length + 100,
+    `captured only ${DESCRIPTIONS.length - TOOLS.length} param descriptions — zod .description access probably drifted`
+  );
+
+  const unknown = DESCRIPTIONS.flatMap(({ where, text }) =>
+    [...inlineToolCandidates(text)]
+      .filter((t) => !REGISTERED.has(t) && !DESCRIPTION_KNOWN.has(t) && !NON_TOOL_IDENTIFIERS.has(t.toLowerCase()))
+      .map((t) => `${where}: ${t}`)
+  );
+  assert.deepEqual(
+    unknown,
+    [],
+    `description(s) name tool(s) not registered in server/tools/*.js: ${unknown.join("; ")}. ` +
+    `Either the name is stale (fix the description) or it's a non-param identifier (add it to DESCRIPTION_KNOWN).`
+  );
+});
