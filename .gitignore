@@ -25,3 +25,6 @@ server/e2e/fixtures/worlds/*/data/*/LOG.old
 # Ignoring it means a regenerated fixture can be committed looking complete and
 # open with zero records. Keep the fixture's WAL.
 !server/e2e/fixtures/worlds/*/data/*/*.log
+
+# Local tool-usage audit report (world names, eval body previews)
+usage-audit.txt

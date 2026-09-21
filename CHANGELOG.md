@@ -4,6 +4,16 @@ All notable changes to Foundry MCP Live are documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-21
+
+First stable release. The version jumps 0.19.0-beta.3 → 1.0.0 rather than
+0.19.0: the three `0.19.0-beta.*` pre-releases never reached anyone installing
+normally, because a GitHub pre-release stays out of `releases/latest` — which
+is the manifest URL baked into every installed copy. Stable installs have been
+sitting on 0.18.0 while the tool surface was consolidated 96 → 31, CI and a
+licence were added, and the relay gateway landed. This release is all of that,
+and the version number now says the bridge is done being provisional.
+
 ### Added
 
 - **CI that actually runs the tests.** `.github/workflows/ci.yml` runs the
@@ -59,6 +69,20 @@ All notable changes to Foundry MCP Live are documented in this file.
 
 ### Changed
 
+- **`evaluate` is now ON by default** (`FOUNDRY_MCP_ALLOW_EVAL` became opt-out:
+  set it to `0`/`false`/`no`/`off` to drop the tool). Three months of telemetry
+  made the opt-in indefensible: `evaluate` is 59% of all calls and appears in
+  166 of 225 sessions, and the gap it fills is structural, not incidental —
+  document and scene flags have no read tool, `get_settings` cannot write, and
+  nothing reads a module's own source. With the gate shut an agent doesn't
+  report a missing capability, it works around it with worse methods, so the
+  "safe default" mostly bought confusing failures. Both ports are loopback-bound
+  and the MCP client is one you configured yourself, which is the actual
+  boundary. Unchanged: the write gate (`FOUNDRY_MCP_ALLOW_WRITE`, still off) and
+  relayed eval (`relayAllowEvaluate`, still off — there the receiving browser is
+  someone else's). Worth knowing: `evaluate` does not pass through the GM's
+  in-Foundry "Allow AI to modify the world" switch, so that switch is only
+  binding under `FOUNDRY_MCP_ALLOW_EVAL=0`.
 - **`npm run e2e` runs the whole thing locally, with no key and no secrets.**
   `server/e2e/run-local.mjs` stands up a second Foundry from the install you
   already have — its own port, its own dataPath, the fixture world — joins it
@@ -126,9 +150,8 @@ All notable changes to Foundry MCP Live are documented in this file.
   uses) and `get_active_effects`, `get_selected_token`,
   `list_region_behavior_types`, `actor_ownership`, `get_scene_levels`,
   `actor_items`, `list_items`, `list_journals`, `journal`, `region` (1–8 uses).
-  Their operations remain reachable via `evaluate`
-  (`FOUNDRY_MCP_ALLOW_EVAL=1` is on in this deployment); the module-side
-  bridge handlers are unchanged. TOOLS.md, AGENTS.md, and the docs test
+  Their operations remain reachable via `evaluate` (on by default as of this
+  release); the module-side bridge handlers are unchanged. TOOLS.md, AGENTS.md, and the docs test
   fixture updated to match.
 
 ### Fixed

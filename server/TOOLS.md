@@ -356,7 +356,7 @@ Runtime diagnostics with three modes; the `action` discriminator picks the mode.
   - See `docs/debugging-recipes.md` for the scenario→hook lookup table behind every preset.
 
 ### `evaluate`
-**The power tool.** Runs arbitrary JavaScript in the Foundry client context. The `expression` you pass becomes the body of an async function with `game`, `canvas`, `ui` in scope. Use `return` to send a value back. **Only present when `FOUNDRY_MCP_ALLOW_EVAL=1`.**
+**The power tool.** Runs arbitrary JavaScript in the Foundry client context. The `expression` you pass becomes the body of an async function with `game`, `canvas`, `ui` in scope. Use `return` to send a value back. **Present by default; absent when `FOUNDRY_MCP_ALLOW_EVAL=0`.**
 
 - **Params**: `expression` (required), `timeoutMs?` (clamped 5000–180000; default 15000), `background?` (start as a job, return `{ jobId, status }` immediately).
 - **Returns**: `{ result, evalMs }`, a background job id, a large-result handle (>256 KiB), or `{ error, stack }` on throw.

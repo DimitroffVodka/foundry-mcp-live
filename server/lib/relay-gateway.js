@@ -149,7 +149,7 @@ export function createRelayGateway({
       throw new Error(
         !mod.installed ? "foundry-mcp-live is not installed on that Foundry."
         : !mod.active  ? `foundry-mcp-live ${mod.version} is installed but not enabled in this world.`
-        : `foundry-mcp-live ${mod.version} is active but exposes no relay. The relay needs >= 0.19.0-beta.1 ` +
+        : `foundry-mcp-live ${mod.version} is active but exposes no relay. The relay needs 1.0.0 or newer ` +
           `with socket:true in module.json, and Foundry must be RESTARTED after installing it — package ` +
           `socket events are dropped silently until it is.`
       );

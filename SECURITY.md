@@ -29,8 +29,8 @@ Treat the MCP endpoint with the same trust you'd give a logged-in GM browser ses
 
 - **Loopback binding.** HTTP (3000) binds to `127.0.0.1` unconditionally. WebSocket (3001) binds to `127.0.0.1` unless you deliberately widen it with `FOUNDRY_WS_HOST`; when you do and no bridge token is set, the server logs a warning at startup naming the exposure.
 - **CORS lockdown.** The HTTP server rejects any `Origin` header that isn't `localhost` / `127.0.0.1` / `[::1]`. CLI clients (no `Origin`) and the proxy.mjs stdio bridge are unaffected. A malicious site visited in another tab cannot POST to the MCP endpoint with a custom JSON Content-Type without a preflight, and the preflight gets a 403.
-- **`evaluate` is opt-in.** The most dangerous tool is disabled unless `FOUNDRY_MCP_ALLOW_EVAL=1` is set in the server's environment.
-- **World-authoring tools are opt-in.** `create_folder`, `create_actor`, `create_actor_from_compendium`, `add_items_to_actor`, `create_journal_entry`, and `update_journal_page` are disabled unless `FOUNDRY_MCP_ALLOW_WRITE=1` is set. With the gate off they aren't even registered, so they don't appear in any MCP client's tool list.
+- **`evaluate` is on by default, and opt-out.** The most dangerous tool ships enabled: both ports are loopback-bound, the MCP client is one you configured yourself, and the opt-in caused more harm than it prevented (an agent without `evaluate` silently fails at everything no dedicated tool covers). Set `FOUNDRY_MCP_ALLOW_EVAL=0` in the server's environment to drop it. Note that `evaluate` does **not** pass through the GM's in-Foundry "Allow AI to modify the world" switch — that switch gates the audited mutation tools, not arbitrary JS. If you need that switch to be binding, run with `FOUNDRY_MCP_ALLOW_EVAL=0`.
+- **World-authoring tools are opt-in.** `actor_write`, `scene`, `combat`, `apply_damage`, and `request` are disabled unless `FOUNDRY_MCP_ALLOW_WRITE=1` is set; with the gate off they aren't even registered, so they don't appear in any MCP client's tool list. `chat` is registered either way, but its `send` action is refused at call time under the same gate — reading chat is always available.
 - **`self_test` has a second gate.** It requires both the write gate and `FOUNDRY_MCP_ALLOW_SELF_TEST=1`, plus a literal `confirm: true`. Cleanup is limited to documents carrying the current run's unique flag.
 - **Client relaunch is opt-in and loopback-only by default.** `relaunch_client` is absent unless `FOUNDRY_RELAUNCH_ENABLED=1`. It rejects credentials embedded in URLs and non-loopback Foundry hosts unless remote use is explicitly enabled.
 - **Vendored dependencies.** `html2canvas` is bundled in `module/lib/`; the module never fetches code from a CDN at runtime.
@@ -142,13 +142,13 @@ With `BRIDGE_TOKEN` set, every connection must authenticate:
 
 Without the matching token: HTTP returns `401`, WebSocket is closed with code `1008`.
 
-## Opt-in: enable `evaluate`
+## Opt-out: disable `evaluate`
 
 ```bash
-FOUNDRY_MCP_ALLOW_EVAL=1 npm start
+FOUNDRY_MCP_ALLOW_EVAL=0 npm start
 ```
 
-You probably want this enabled for serious work — most module debugging benefits from `evaluate`. The opt-in is so that someone trying the bridge for the first time doesn't accidentally hand RCE to a misbehaving AI.
+`evaluate` is on by default because most real work needs it — module debugging especially — and because a gated tool is indistinguishable, from the far side of an LLM, from a broken one: the agent works around the gap with worse methods instead of telling you the gate is shut. Turn it off for a world you don't fully control, for a session where you want the GM's in-Foundry read-only switch to be binding, or any time the bridge is pointed at something you'd rather a misbehaving AI couldn't run arbitrary JS against.
 
 Background evaluations use the same trust model. `job_result` does not grant
 additional execution ability; it only retrieves bounded results from work
@@ -161,11 +161,11 @@ total retained data to 32 MiB, and concurrent jobs to 10.
 FOUNDRY_MCP_ALLOW_WRITE=1 npm start
 ```
 
-Enables `create_folder`, `create_actor`, `create_actor_from_compendium`, `add_items_to_actor`, `create_journal_entry`, and `update_journal_page` — all tools that create or modify persistent world data (actors, journals, folders).
+Enables `actor_write` (create / import / update / delete an actor), `scene` (create, update, activate, delete), `combat` (start, advance, end), `apply_damage`, and `request` — plus `chat` action `send`, which is checked at call time rather than at registration.
 
-These are safer than `evaluate` (no arbitrary code execution) but still write to your world. A misbehaving AI could litter your sidebar with junk folders or overwrite a journal page. Foundry's undo stops at the page level for journals, so a single `update_journal_page` with `content` (vs. `appendContent`) replaces the body and isn't recoverable from the UI.
+These are safer than `evaluate` (no arbitrary code execution) but still write to your world, and a misbehaving AI can delete an actor or wipe a scene as easily as create one. Two things blunt that: mutating tools accept an `audit` parameter that records a before/after diff, and the GM has a master switch inside Foundry — **Module Settings → Foundry MCP Live → Allow AI to modify the world** — that refuses every audited mutation regardless of the server's environment. That switch does not stop `evaluate`, which is on by default; see the `evaluate` section above.
 
-For Codex CLI users: pairing this opt-in with per-tool `approval_mode = "approve"` on at least `update_journal_page` is a reasonable belt-and-suspenders setup.
+For Codex CLI users: pairing this opt-in with per-tool `approval_mode = "approve"` on at least `actor_write` and `scene` is a reasonable belt-and-suspenders setup.
 
 ## Opt-in: schema self-test
 

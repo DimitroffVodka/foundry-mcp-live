@@ -40,6 +40,11 @@ const NON_TOOL_IDENTIFIERS = new Set([
   "initialize",        // GEMINI.md: MCP handshake method
   "url",               // GEMINI.md: Gemini settings key
   "read_resource",     // GEMINI.md: named only to say there are no resources
+  // README.md: discriminator params, their values, and globals shown inline.
+  // `target` is the screenshot discriminator here, not the old standalone
+  // token-targeting tool (now `token` action 'target').
+  "type", "target", "rig", "api", "game", "version", "ready",
+  "false", "no", "off", "localhost",
 ]);
 
 // Bare snake_case identifiers from INLINE `code` spans only. Fenced ``` blocks
@@ -63,6 +68,11 @@ const DOCS = [
   // so a lower non-vacuous floor.
   { label: "server instructions", text: SERVER_INSTRUCTIONS, minKnown: 5 },
   { label: "GEMINI.md", text: readFileSync(fileURLToPath(new URL("../../GEMINI.md", import.meta.url)), "utf8"), minKnown: 3 },
+  // The README's tool table had rotted to the pre-consolidation surface
+  // (list_actors, get_macro, get_selected_token…) and nothing caught it,
+  // because this test only watched the agent-facing docs. It is the first
+  // thing a new user reads, so it gets the same guard.
+  { label: "README.md", text: readFileSync(fileURLToPath(new URL("../../README.md", import.meta.url)), "utf8"), minKnown: 20 },
   // server/TOOLS.md is deliberately excluded: its "Merges the old X" notes name
   // dead tools on purpose. docs-tool-coverage.test.js guards it instead.
 ];

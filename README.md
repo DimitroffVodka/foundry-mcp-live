@@ -113,12 +113,12 @@ The systemd service keeps the same safe defaults as `npm start`: write, eval, se
 
 #### Optional: enable opt-in tools
 
-Power tools are **off by default** and won't appear in any client's tool list until you enable them. Read [SECURITY.md](SECURITY.md) before flipping these on.
+World-authoring power tools are **off by default** and won't appear in any client's tool list until you enable them. `evaluate` is the exception — it is **on by default** (see [SECURITY.md](SECURITY.md) for why, and how to turn it off). Read [SECURITY.md](SECURITY.md) before flipping the rest on.
 
 | Env var | Adds | Risk if mis-used |
 |---|---|---|
 | `FOUNDRY_MCP_ALLOW_WRITE=1` | World-authoring tools | Creates, updates, or deletes persistent world data |
-| `FOUNDRY_MCP_ALLOW_EVAL=1` | `evaluate`, `job_result` | Arbitrary JS in your Foundry browser context; background jobs and bounded large-result retrieval |
+| `FOUNDRY_MCP_ALLOW_EVAL=0` | *removes* `evaluate`, `job_result` | These are on by default: arbitrary JS in your Foundry browser context; background jobs and bounded large-result retrieval |
 | `FOUNDRY_MCP_ALLOW_SELF_TEST=1` | `self_test` (also requires writes) | Temporarily creates and deletes uniquely flagged test documents |
 | `FOUNDRY_RELAUNCH_ENABLED=1` | `relaunch_client` | Launches a configured local Chrome and joins as the configured GM |
 
@@ -127,18 +127,17 @@ Power tools are **off by default** and won't appear in any client's tool list un
 ```powershell
 # Windows PowerShell
 $env:FOUNDRY_MCP_ALLOW_WRITE = "1"
-$env:FOUNDRY_MCP_ALLOW_EVAL  = "1"
 npm start
 ```
 
 ```bash
 # macOS / Linux
-FOUNDRY_MCP_ALLOW_WRITE=1 FOUNDRY_MCP_ALLOW_EVAL=1 npm start
+FOUNDRY_MCP_ALLOW_WRITE=1 npm start
 ```
 
 **Persistent** — edit your launcher so every start picks them up:
 
-- Windows: edit [`server/start.bat`](server/start.bat) and add `set FOUNDRY_MCP_ALLOW_WRITE=1` (and/or `set FOUNDRY_MCP_ALLOW_EVAL=1`) on a line above the `node "%~dp0server.js"` line.
+- Windows: edit [`server/start.bat`](server/start.bat) and add `set FOUNDRY_MCP_ALLOW_WRITE=1` (or `set FOUNDRY_MCP_ALLOW_EVAL=0` to drop `evaluate`) on a line above the `node "%~dp0server.js"` line.
 - macOS/Linux: export them in your shell profile (`~/.zshrc`, `~/.bashrc`), or wrap `npm start` in your own launcher script.
 
 After enabling, the server's startup output is the source of truth. If you set the vars but the new tools still don't appear in your AI client, it usually means the env var didn't actually reach the node process — verify with `echo %FOUNDRY_MCP_ALLOW_WRITE%` (Windows) or `echo $FOUNDRY_MCP_ALLOW_WRITE` (macOS/Linux) in the same shell *before* you launch.
@@ -244,32 +243,60 @@ Full per-platform walkthrough: **[docs/updating-the-server.md](docs/updating-the
 
 ## Available Tools
 
+33 tools. Related operations are merged behind one tool that takes a discriminator — `action`, or `type` / `target` where that reads better — so don't assume one tool per verb. Each tool's schema lists its own valid values.
+
+**Connection and diagnostics**
+
 | Tool | Description |
 |------|-------------|
-| `get_game_info` | System, world, version, connected users |
-| `list_actors` | All actors (filterable by type/folder) |
-| `get_actor` | Full actor data by id or name |
-| `get_selected_token` | Currently selected token + actor |
-| `get_active_effects` | Active Effects on a specific actor |
-| `list_modules` | Installed modules (active by default) |
-| `list_compendiums` | All compendium packs with metadata |
-| `search_compendium` | Text search within a pack |
-| `get_compendium_document` | Full document from a pack |
-| `list_items` | World-level items |
-| `get_item` | Full item data by id or name |
-| `get_scene` | Active scene, grid, all token positions |
-| `get_data_model` | System data model template |
-| `list_journals` | Journal entries |
-| `list_tables` | Roll tables |
-| `list_macros` | Macro list with preview |
-| `get_macro` | Full macro source code |
-| `get_console_errors` | Recent console errors/warnings |
-| `evaluate` | Run arbitrary JS in Foundry context |
-| `job_result` | Poll background evaluations or read large results in chunks |
-| `list_connected_bridges` | Show which Foundry users are connected (server-local tool) |
-| `bridge_status` | Diagnose bridge and Foundry server availability without a live bridge |
-| `relaunch_client` | Restore a dead configured GM browser session (opt-in) |
-| `self_test` | Guarded Foundry schema-drift smoke test (opt-in) |
+| `get_game_info` | Liveness check: system, world, version, connected users |
+| `list_connected_bridges` | Which Foundry users are connected — the source of `targetUser` values |
+| `bridge_status` | Diagnose the whole connection chain even when no bridge is attached |
+| `get_debug_snapshot` | One call for situational awareness: world, scene, selection, targets, combat, recent errors |
+| `get_console_errors` | Rolling buffer of `console.error` / `console.warn` from the client |
+| `reload_foundry` | Reload a Foundry tab and wait for its bridge to come back |
+| `relaunch_client` | Relaunch a closed GM browser session (opt-in) |
+
+**Reading the world**
+
+| Tool | Description |
+|------|-------------|
+| `list` | List a collection — `type`: actor, scene, module, rollTable, compendium |
+| `document` | Read one document — `action`: actor, item, compendium, actorItems |
+| `scene_read` | The active scene — `action`: summary, placeables |
+| `search_compendium` | Name-substring search inside one pack |
+| `get_data_model` | System schema for a document type: which `system.*` fields are real |
+| `get_settings` | Read Foundry settings |
+| `query_grid` | Per-cell spatial state — walls, occupancy, reachability |
+| `get_combat` | Read-only view of the active encounter |
+| `call_module_api` | Call a function another module exposes on its `api` |
+
+**Acting on the world**
+
+| Tool | Description |
+|------|-------------|
+| `token` | `action`: details, move, create, update, delete, toggleCondition, target, setLevel |
+| `interact` | Drive the live UI — `action`: click, dialog |
+| `use_item` | Runs the system's own item-use workflow, so attack and crit logic stay intact |
+| `roll` | Evaluate a dice formula; can force specific dice via `rig` |
+| `chat` | `action`: send, read (sending needs the write gate) |
+| `actor_write` | `action`: create, fromCompendium, update, delete (write gate) |
+| `scene` | `action`: create, update, activate, delete (write gate) |
+| `combat` | `action`: start, advance, end (write gate) |
+| `apply_damage` | Damage with per-target outcomes, HP clamped by the system (write gate) |
+| `request` | Prompts a real player's screen and waits — `action`: roll, check, itemUse (write gate) |
+
+**Capture and investigation**
+
+| Tool | Description |
+|------|-------------|
+| `screenshot` | Returns an image — `target`: canvas, dom, scene_grid, cdp |
+| `record_video` | Record the game viewport (CDP screencast + ffmpeg) |
+| `snapshot` | Actor state before and after — `action`: take, diff |
+| `trace` | Runtime diagnostics — `action`: hooks, socket, workflow |
+| `evaluate` | Arbitrary JS in the Foundry client context |
+| `job_result` | Poll a background `evaluate`, or read a large result in chunks |
+| `self_test` | Guarded schema-drift smoke test after a Foundry update (opt-in) |
 
 See [server/TOOLS.md](server/TOOLS.md) for full tool schemas and arguments.
 
@@ -315,9 +342,9 @@ You should get a 200 with an `mcp-session-id` header.
 | `FOUNDRY_WS_PORT` | `3001` | WebSocket port the Foundry module connects to |
 | `FOUNDRY_MCP_PORT` | `3000` | HTTP port MCP clients connect to |
 | `FOUNDRY_MCP_URL` | `http://127.0.0.1:3000/mcp` | Used by `proxy.mjs` to find the HTTP server |
-| `FOUNDRY_MCP_ALLOW_EVAL` | `0` | Set to `1` to enable the `evaluate` tool (arbitrary JS in Foundry context). See [SECURITY.md](SECURITY.md). |
+| `FOUNDRY_MCP_ALLOW_EVAL` | `1` | On by default. Set to `0`/`false`/`no`/`off` to drop the `evaluate` tool (arbitrary JS in Foundry context). See [SECURITY.md](SECURITY.md). |
 | `FOUNDRY_URLS` | empty | Comma-separated Foundry origins for restart-safe `bridge_status` probes, e.g. `http://localhost:30000`. |
-| `FOUNDRY_MCP_ALLOW_WRITE` | `0` | Set to `1` to enable world-authoring tools (`create_folder`, `create_actor`, `create_journal_entry`, etc.) that mutate persistent world data. See [SECURITY.md](SECURITY.md). |
+| `FOUNDRY_MCP_ALLOW_WRITE` | `0` | Set to `1` to enable the world-authoring tools (`actor_write`, `scene`, `combat`, `apply_damage`, `request`) that mutate persistent world data. See [SECURITY.md](SECURITY.md). |
 | `FOUNDRY_MCP_ALLOW_SELF_TEST` | `0` | Set to `1` alongside `FOUNDRY_MCP_ALLOW_WRITE=1` to register the guarded `self_test` tool. |
 | `FOUNDRY_MCP_USAGE` | `1` | Tool-usage telemetry — records each tool call to an in-memory aggregate (`GET /api/usage`) and a JSONL log. Set to `0`/`false`/`no`/`off` to disable. |
 | `FOUNDRY_MCP_USAGE_LOG` | `server/usage-telemetry.jsonl` | Path for the per-call JSONL usage log. The log may contain truncated arg previews and `evaluate` bodies, so keep it local. |
@@ -385,7 +412,7 @@ Clients can still override with `localStorage.setItem("mcpBridgeToken", "…")` 
 
 - The WebSocket connection auto-reconnects every 5 seconds if Foundry is reloaded. The hello frame is re-sent each time.
 - Console error capture starts when the module loads — errors before the `ready` hook are missed.
-- The `evaluate` tool runs arbitrary JS in the Foundry client context — disabled by default. Enable with `FOUNDRY_MCP_ALLOW_EVAL=1`. Use `background: true` plus `job_result` for unbounded work; results larger than 256 KiB are returned by handle.
+- The `evaluate` tool runs arbitrary JS in the Foundry client context — enabled by default, since both ports are loopback-only and the client is one you configured. Disable with `FOUNDRY_MCP_ALLOW_EVAL=0`. Use `background: true` plus `job_result` for unbounded work; results larger than 256 KiB are returned by handle.
 - World-authoring tools (create actors/folders/journals) also mutate persistent state and are disabled by default. Enable with `FOUNDRY_MCP_ALLOW_WRITE=1`. See [SECURITY.md](SECURITY.md).
 - `relaunch_client` is local and opt-in. Keep its Chrome profile dedicated to Foundry automation and store any GM password only in the server environment.
 - Both ports bind to `127.0.0.1` only — not exposed to the network.
@@ -423,7 +450,7 @@ to be running, since the bridge is what is under test.
 ## Releasing a new version
 
 1. Bump `version` in [module/module.json](module/module.json) and [server/package.json](server/package.json), and refresh both root `version` fields in `server/package-lock.json` (top level and `packages[""]`). `server.js` needs no edit — `SERVER_VERSION` is read from `package.json` at startup. Move the `## [Unreleased]` entries in [CHANGELOG.md](CHANGELOG.md) under a dated `## [x.y.z]` heading.
-2. Commit, then tag and push: `git tag v0.5.2 && git push --tags`.
+2. Commit, then tag and push: `git tag v1.0.1 && git push --tags`. A tag with a pre-release suffix (`v1.1.0-beta.1`) publishes as a GitHub pre-release and stays out of `releases/latest`, so it never offers itself as an update to stable installs — which also means nobody gets it unless they install its versioned manifest by hand.
 3. The [release workflow](.github/workflows/release.yml) builds `module.zip` and publishes a GitHub Release with `module.json` + `module.zip` attached. The manifest URL `releases/latest/download/module.json` then points at the new version automatically, so Foundry's update check picks it up.
 
 ## License
