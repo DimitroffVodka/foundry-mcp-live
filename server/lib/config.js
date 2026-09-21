@@ -149,12 +149,20 @@ export const WS_ALLOWED_ORIGINS = [
   .map(value => _originOf(String(value).trim()) || String(value).trim())
   .filter(Boolean);
 
-// `evaluate` runs arbitrary JS in the live Foundry browser context. Gated
-// behind an explicit opt-in to make the default install safer.
-export const ALLOW_EVAL       = /^(1|true|yes)$/i.test(process.env.FOUNDRY_MCP_ALLOW_EVAL ?? "");
+// `evaluate` runs arbitrary JS in the live Foundry browser context. ON by
+// default: both ports are loopback-bound and the MCP client is one you
+// configured yourself, and the opt-in cost more than it bought — an agent with
+// no `evaluate` hits a wall on everything no dedicated tool covers (document
+// and scene flags, settings writes, reading a module's own source) and the
+// operator can't tell a gated tool from a broken one. Set
+// FOUNDRY_MCP_ALLOW_EVAL=0 to turn it off.
+// This does NOT open eval over the relay — that is a separate world setting
+// (`relayAllowEvaluate`), still off, because there the receiving browser is
+// someone else's.
+export const ALLOW_EVAL       = !/^(0|false|no|off)$/i.test(process.env.FOUNDRY_MCP_ALLOW_EVAL ?? "");
 
-// World-authoring tools (create_folder, create_actor*, add_items_to_actor,
-// create_journal_entry, update_journal_page) create persistent world data.
+// World-authoring tools (actor_write, scene, combat, apply_damage, request,
+// and chat action 'send') create or destroy persistent world data.
 // Gated behind an explicit opt-in so the default install can't be tricked
 // into mutating the world via an LLM hallucination.
 export const ALLOW_WRITE      = /^(1|true|yes)$/i.test(process.env.FOUNDRY_MCP_ALLOW_WRITE ?? "");

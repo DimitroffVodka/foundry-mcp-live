@@ -23,7 +23,7 @@
  *   FOUNDRY_WS_ALLOWED_ORIGINS – Extra browser origins allowed to connect from this
  *                               machine without a token (comma-separated). Loopback
  *                               origins are already allowed
- *   FOUNDRY_MCP_ALLOW_EVAL    – "1" enables the `evaluate` tool (off by default)
+ *   FOUNDRY_MCP_ALLOW_EVAL    – "0" disables the `evaluate` tool (on by default)
  */
 
 import { McpServer }                      from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -135,9 +135,9 @@ if (BRIDGE_TOKEN) {
   log("BRIDGE_TOKEN set — requiring Authorization: Bearer header on /mcp");
 }
 
-if (!ALLOW_EVAL) {
-  log("`evaluate` tool DISABLED (set FOUNDRY_MCP_ALLOW_EVAL=1 to enable).");
-}
+log(ALLOW_EVAL
+  ? "`evaluate` tool ENABLED — arbitrary JS in the Foundry browser context (set FOUNDRY_MCP_ALLOW_EVAL=0 to disable)."
+  : "`evaluate` tool DISABLED (unset FOUNDRY_MCP_ALLOW_EVAL to re-enable).");
 
 log(isUsageTelemetryEnabled()
   ? `Tool-usage telemetry ON → ${getUsageLogPath()} (read GET /api/usage; set FOUNDRY_MCP_USAGE=0 to disable)`

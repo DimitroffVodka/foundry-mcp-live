@@ -39,7 +39,7 @@ export function registerRuntimeTools(mcp) {
       level:   z.enum(["error", "warn"]).optional().describe("Filter by level."),
     });
 
-  // --- Evaluate (opt-in: requires FOUNDRY_MCP_ALLOW_EVAL=1) ---
+  // --- Evaluate (on by default; opt out with FOUNDRY_MCP_ALLOW_EVAL=0) ---
   if (ALLOW_EVAL) {
     registerRawTool(mcp, "evaluate",
       "LAST-RESORT power tool — prefer a dedicated tool when one exists. The "

@@ -15,12 +15,12 @@ mkdir -p "$SERVICE_DIR" "$ENV_DIR"
 if [[ ! -f "$ENV_PATH" ]]; then
   cat > "$ENV_PATH" <<'ENVEOF'
 # Foundry MCP Live server environment.
-# Defaults are intentionally safe: write/eval/self-test tools are off.
+# Write and self-test tools are off by default; `evaluate` is ON by default.
 # Uncomment only what you want for this local machine.
 
 # FOUNDRY_MCP_ALLOW_WRITE=1
-# FOUNDRY_MCP_ALLOW_EVAL=1
 # FOUNDRY_MCP_ALLOW_SELF_TEST=1
+# FOUNDRY_MCP_ALLOW_EVAL=0   # uncomment to DROP the evaluate tool
 
 # Optional ports/hosts.
 # FOUNDRY_MCP_PORT=3000
