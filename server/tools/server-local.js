@@ -197,6 +197,88 @@ export async function fetchFixtureFragment({ fixture, module, state }, { timeout
   }
 }
 
+// One offline render. Never throws: a failure comes back as `error` so a
+// compare can still show the other side.
+async function renderFixtureOnce({ fixture, module, theme, width, state }) {
+  const outPng = path.join(tmpdir(), `design-fixture-${fixture}-${theme}-${randomUUID()}.png`);
+  const inv = buildDesignRenderInvocation({ fixture, module, theme, width, state }, outPng);
+  try {
+    const { stdout } = await execFileAsync(process.execPath, inv.args,
+      { env: inv.env, cwd: homedir(), timeout: 90_000, maxBuffer: 8 << 20 });
+    // shot.mjs prints its server banner, then the PNG path, then the check.
+    const check = stdout.split("\n")
+      .filter(l => l.trim() && !l.startsWith("design harness:") && l.trim() !== outPng)
+      .join("\n").trim();
+    const png = existsSync(outPng) ? readFileSync(outPng) : null;
+    if (!check || check.startsWith("(no check ran)")) {
+      return { png, check: null, error: `render failed — no layout check was produced (the image, if any, is likely the harness error page). On the server host run: node ${path.join(designHarnessDir(), "shot.mjs")} ${fixture} — it prints the stack.` };
+    }
+    return { png, check, error: null };
+  } catch (err) {
+    const detail = String(err.stderr || err.message || err).trim().split("\n").slice(-6).join("\n");
+    return { png: null, check: null, error: `render_fixture failed: ${detail}` };
+  } finally {
+    try { unlinkSync(outPng); } catch { /* already gone */ }
+  }
+}
+
+// What a compare says about one theme: did the pixels move, did the check change.
+function compareVerdict(base, head) {
+  if (base.error || head.error) return "not comparable — one side failed to render.";
+  const pixels = base.png && head.png && base.png.equals(head.png) ? "pixels identical" : "pixels differ";
+  const layout = base.check === head.check
+    ? "layout check unchanged"
+    : `layout check CHANGED\n  base: ${base.check.replace(/\n/g, " | ")}\n  head: ${head.check.replace(/\n/g, " | ")}`;
+  return `${pixels}; ${layout}`;
+}
+
+export async function renderFixtureReport({ fixture, module, against, state, theme, width }) {
+  const text = (t) => ({ content: [{ type: "text", text: t }] });
+  const head = validateDesignTarget({ fixture, module });
+  if (head.error) return text(head.error);
+
+  // `against` is the BASE side. A fixture the base lacks is a NEW fixture, not
+  // an error — anything else wrong with `against` is.
+  let baseHasFixture = false;
+  if (against) {
+    const base = validateDesignTarget({ fixture, module: against });
+    baseHasFixture = !base.error;
+    if (base.error) {
+      const t = designRenderTarget({ fixture, module: against });
+      const onlyFixtureMissing = path.isAbsolute(against)
+        && existsSync(path.join(t.moduleDir, "module.json")) && existsSync(t.fixturesDir) && !existsSync(t.fixtureFile);
+      if (!onlyFixtureMissing) return text(`against: ${base.error}`);
+    }
+  }
+
+  const themes = theme === "both" ? ["dark", "light"] : [theme ?? "dark"];
+  const parts = [];
+  const notes = [];
+  let images = 0;
+  const show = (label, r) => {
+    if (r.png) { parts.push({ type: "text", text: label }, { type: "image", data: r.png.toString("base64"), mimeType: "image/png" }); images++; }
+    notes.push(`${label} ${r.error ?? r.check}`);
+  };
+  for (const t of themes) {
+    const headRun = await renderFixtureOnce({ fixture, module, theme: t, width, state });
+    if (!against) { show(`[${t}]`, headRun); continue; }
+    if (!baseHasFixture) {
+      notes.push(`[${t}] base: \`${fixture}\` does not exist in ${path.resolve(against)} — new in head.`);
+      show(`[${t}] head`, headRun);
+      continue;
+    }
+    const baseRun = await renderFixtureOnce({ fixture, module: against, theme: t, width, state });
+    show(`[${t}] base`, baseRun);
+    show(`[${t}] head`, headRun);
+    notes.push(`[${t}] ${compareVerdict(baseRun, headRun)}`);
+  }
+  const summary = against
+    ? `Compared \`${fixture}\`: base ${path.resolve(against)} vs head ${head.moduleDir}`
+    : `Rendered \`${fixture}\` from ${head.moduleDir}`;
+  return { content: [...parts, { type: "text", text:
+    `${summary} (${themes.join("+")})${width ? ` at ${width}px` : ""} — ${images} image(s).\n${notes.join("\n")}` }] };
+}
+
 export function registerServerLocalTools(mcp) {
   registerRawTool(mcp, "list_connected_bridges",
     "List all Foundry users currently connected via the bridge module. "
@@ -452,7 +534,7 @@ export function registerServerLocalTools(mcp) {
       + "running (core CSS + the game system's CSS + a module's stylesheets, offline) and return "
       + "the image plus the harness's layout check (visible/primary button counts, overflow, tiny "
       + "controls, missing string keys). The offline design-review loop for any module checkout — `screenshot` is its "
-      + "live-world counterpart; theme 'both' renders dark and light in one call. Present only when a design harness is installed on this host "
+      + "live-world counterpart; theme 'both' renders dark and light in one call; `against` compares a base checkout with the head and reports whether pixels and the layout check changed (PR review). Present only when a design harness is installed on this host "
       + "(FOUNDRY_DESIGN_HARNESS overrides the default path); needs chromium on the host.",
       {
         fixture: z.string().regex(/^[\w-]+$/).optional().describe(
@@ -466,49 +548,17 @@ export function registerServerLocalTools(mcp) {
         state: z.string().regex(/^[\w.-]+$/).optional().describe(
           "Named fixture state, when the fixture defines them (see its build(state))."
         ),
+        against: z.string().optional().describe(
+          "Absolute path to a BASE module checkout (a PR's base worktree, a release checkout). Renders the "
+          + "fixture from both — `against` is the base, `module` (or the default module) is the head — and reports "
+          + "whether the pixels and the layout check changed. A fixture missing from the base is reported as new."
+        ),
         theme: z.enum(["dark", "light", "both"]).optional().describe("Window theme: 'dark' (default), 'light', or 'both' (renders twice and returns both images — light is where most design misses happen)."),
         width: z.number().int().positive().optional().describe(
           "Force the window width in px (e.g. 420 to check the narrow case)."
         ),
       },
-      async ({ fixture, module, state, theme, width }) => {
-        const target = validateDesignTarget({ fixture, module });
-        if (target.error) return { content: [{ type: "text", text: target.error }] };
-        const { moduleDir } = target;
-        const themes = theme === "both" ? ["dark", "light"] : [theme ?? "dark"];
-        const parts = [];
-        const notes = [];
-        let rendered = 0;
-        for (const t of themes) {
-          const outPng = path.join(tmpdir(), `design-fixture-${fixture}-${t}-${randomUUID()}.png`);
-          const inv = buildDesignRenderInvocation({ fixture, module, theme: t, width, state }, outPng);
-          try {
-            const { stdout } = await execFileAsync(process.execPath, inv.args,
-              { env: inv.env, cwd: homedir(), timeout: 90_000, maxBuffer: 8 << 20 });
-            // shot.mjs prints its server banner, then the PNG path, then the check.
-            const check = stdout.split("\n")
-              .filter(l => l.trim() && !l.startsWith("design harness:") && l.trim() !== outPng)
-              .join("\n").trim();
-            if (existsSync(outPng)) {
-              parts.push({ type: "text", text: `[${t}]` },
-                { type: "image", data: readFileSync(outPng).toString("base64"), mimeType: "image/png" });
-              rendered++;
-            }
-            if (!check || check.startsWith("(no check ran)")) {
-              notes.push(`[${t}] render failed — no layout check was produced (the image, if any, is likely the harness error page). On the server host run: node ${path.join(designHarnessDir(), "shot.mjs")} ${fixture} — it prints the stack.`);
-            } else {
-              notes.push(`[${t}] ${check}`);
-            }
-          } catch (err) {
-            const detail = String(err.stderr || err.message || err).trim().split("\n").slice(-6).join("\n");
-            notes.push(`[${t}] render_fixture failed: ${detail}`);
-          } finally {
-            try { unlinkSync(outPng); } catch { /* already gone */ }
-          }
-        }
-        const head = `Rendered \`${fixture}\` from ${moduleDir} (${themes.join("+")})${width ? ` at ${width}px` : ""} — ${rendered} image(s).`;
-        return { content: [...parts, { type: "text", text: `${head}\n${notes.join("\n")}` }] };
-      });
+      renderFixtureReport);
 
   }
 

@@ -11,6 +11,7 @@ import {
   buildDesignRenderInvocation,
   validateDesignTarget,
   fetchFixtureFragment,
+  renderFixtureReport,
   buildPreviewOpenExpression,
   buildPreviewCloseExpression,
   PREVIEW_WINDOW_ID,
@@ -188,4 +189,82 @@ test("fetchFixtureFragment fails fast with the harness's stderr when serve.mjs c
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// withEnv restores synchronously, before an async render has read the env again.
+async function withEnvAsync(value, fn) {
+  const prev = process.env.FOUNDRY_DESIGN_HARNESS;
+  process.env.FOUNDRY_DESIGN_HARNESS = value;
+  try { return await fn(); }
+  finally { if (prev === undefined) delete process.env.FOUNDRY_DESIGN_HARNESS; else process.env.FOUNDRY_DESIGN_HARNESS = prev; }
+}
+
+// A fake harness: shot.mjs writes "the look" of whichever module it renders
+// (MODULE_DIR, else its own checkout) as the PNG and the check, so compare
+// verdicts are testable without chromium.
+function fakeCompareRig({ headLook, baseLook, baseHasFixture = true }) {
+  const root = fs.mkdtempSync(path.join(tmpdir(), "dh-cmp-"));
+  const mk = (name, look, withFixture) => {
+    const dir = path.join(root, name);
+    fs.mkdirSync(path.join(dir, "tools", "design-harness", "fixtures"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "module.json"), "{}");
+    fs.writeFileSync(path.join(dir, "look.txt"), look);
+    if (withFixture) fs.writeFileSync(path.join(dir, "tools", "design-harness", "fixtures", "a.mjs"), "");
+    return dir;
+  };
+  const head = mk("head", headLook, true);
+  const base = mk("base", baseLook, baseHasFixture);
+  fs.writeFileSync(path.join(head, "tools", "design-harness", "shot.mjs"), `
+    import fs from "node:fs"; import path from "node:path";
+    const dir = process.env.MODULE_DIR ?? path.resolve(import.meta.dirname, "../..");
+    const look = fs.readFileSync(path.join(dir, "look.txt"), "utf8");
+    fs.writeFileSync(process.argv[3], look);
+    console.log("design harness: fake");
+    console.log(process.argv[3]);
+    console.log("check: " + look);`);
+  return { root, head, base, harness: path.join(head, "tools", "design-harness") };
+}
+
+test("renderFixtureReport compare: reports changed pixels and a changed layout check", async () => {
+  const rig = fakeCompareRig({ headLook: "wide", baseLook: "narrow" });
+  try {
+    const out = await withEnvAsync(rig.harness, () => renderFixtureReport({ fixture: "a", against: rig.base }));
+    assert.equal(out.content.filter(c => c.type === "image").length, 2);
+    const t = out.content.at(-1).text;
+    assert.match(t, /\[dark\] base check: narrow/);
+    assert.match(t, /\[dark\] head check: wide/);
+    assert.match(t, /pixels differ; layout check CHANGED/);
+  } finally { fs.rmSync(rig.root, { recursive: true, force: true }); }
+});
+
+test("renderFixtureReport compare: identical renders say so", async () => {
+  const rig = fakeCompareRig({ headLook: "same", baseLook: "same" });
+  try {
+    const out = await withEnvAsync(rig.harness, () => renderFixtureReport({ fixture: "a", against: rig.base, theme: "both" }));
+    assert.equal(out.content.filter(c => c.type === "image").length, 4);
+    assert.equal((out.content.at(-1).text.match(/pixels identical; layout check unchanged/g) ?? []).length, 2);
+  } finally { fs.rmSync(rig.root, { recursive: true, force: true }); }
+});
+
+test("renderFixtureReport compare: a fixture absent from the base is new, a bad base is an error", async () => {
+  const rig = fakeCompareRig({ headLook: "x", baseLook: "y", baseHasFixture: false });
+  try {
+    const out = await withEnvAsync(rig.harness, () => renderFixtureReport({ fixture: "a", against: rig.base }));
+    assert.equal(out.content.filter(c => c.type === "image").length, 1);
+    assert.match(out.content.at(-1).text, /does not exist in .*base — new in head/);
+    const bad = await withEnvAsync(rig.harness, () => renderFixtureReport({ fixture: "a", against: path.join(rig.root, "nope") }));
+    assert.match(bad.content[0].text, /^against: Error: no module\.json/);
+    const rel = await withEnvAsync(rig.harness, () => renderFixtureReport({ fixture: "a", against: "rel/dir" }));
+    assert.match(rel.content[0].text, /^against: Error: `module` must be an absolute path/);
+  } finally { fs.rmSync(rig.root, { recursive: true, force: true }); }
+});
+
+test("renderFixtureReport without against keeps the plain single-render shape", async () => {
+  const rig = fakeCompareRig({ headLook: "solo", baseLook: "unused" });
+  try {
+    const out = await withEnvAsync(rig.harness, () => renderFixtureReport({ fixture: "a" }));
+    assert.deepEqual(out.content.map(c => c.type), ["text", "image", "text"]);
+    assert.equal(out.content[0].text, "[dark]");
+    assert.match(out.content.at(-1).text, /^Rendered `a` from .*head \(dark\) — 1 image/);
+  } finally { fs.rmSync(rig.root, { recursive: true, force: true }); }
 });
