@@ -13,6 +13,7 @@ import { z }                                from "zod";
 import { registerRoutedTool, registerRawTool, registerMergedTool, TARGET_USER_DESC, AUDIT_DESC } from "./_helpers.js";
 import { callFoundry, callFoundryImage }    from "../lib/foundry-rpc.js";
 import { cdpScreenshot }                    from "../lib/cdp-screenshot.js";
+import { routeBridge }                      from "../lib/bridges.js";
 
 export function registerCanvasTools(mcp) {
   // --- Scene reads (merged) ---
@@ -109,8 +110,8 @@ export function registerCanvasTools(mcp) {
     + "• target 'cdp' → a DOM element captured via Chrome DevTools Protocol (pixel-perfect, "
     + "no html2canvas approximations). Uses selector (CSS, required), scale (default 2.0, controls "
     + "output resolution multiplier). Captures the browser's actual composited output — form inputs, "
-    + "fonts, and CSS render exactly as the user sees them. Requires the bridge Chromium to be "
-    + "running on port 9222.",
+    + "fonts, and CSS render exactly as the user sees them. Requires a debuggable Chromium (port 9223 or 9222) "
+    + "logged in as the routed client.",
     {
       target:   z.enum(["canvas", "dom", "scene_grid", "cdp"]).optional().describe(
         "What to capture: 'canvas' (PIXI game canvas, default), 'dom' (a DOM element via html2canvas), "
@@ -141,11 +142,17 @@ export function registerCanvasTools(mcp) {
       }
       if (target === "cdp") {
         if (!selector) return { content: [{ type: "text", text: "Error: 'selector' is required for target 'cdp'" }] };
+        // Pin the capture to the routed client's debugger page. With no explicit
+        // targetUser and no bridge connected, keep the old first-page behaviour.
+        let userId;
+        try { userId = routeBridge(targetUser).userId; }
+        catch (err) { if (targetUser) return { content: [{ type: "text", text: `CDP screenshot failed: ${err.message}` }] }; }
         try {
           const data = await cdpScreenshot(selector, {
             scale: scale ?? 2,
             format: format ?? "png",
             quality,
+            userId,
           });
           if (data.error) return { content: [{ type: "text", text: `CDP screenshot error: ${data.error}` }] };
           return {

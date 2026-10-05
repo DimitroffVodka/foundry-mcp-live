@@ -409,7 +409,7 @@ Capture a Foundry image. **Returns an image** (MCP image content block). The `ta
 
 **`target: "scene_grid"`** — like `canvas` but at **full resolution**, **WebP**, with a **coordinate grid overlay** — every cell gets a `"gx,gy"` label in white-on-black. Much bigger payload; vastly better for spatial reasoning. No extra capture params.
 
-**`target: "cdp"`** — a DOM element captured via Chrome DevTools Protocol (**pixel-perfect** — the browser's actual composited output; no html2canvas approximations). `selector` (CSS, required), `scale?` (default 2.0), `format?` (default png), `quality?`. Requires the bridge Chromium on port 9222.
+**`target: "cdp"`** — a DOM element captured via Chrome DevTools Protocol (**pixel-perfect** — the browser's actual composited output; no html2canvas approximations). `selector` (CSS, required), `scale?` (default 2.0), `format?` (default png), `quality?`. Requires a debuggable Chromium on port 9223 or 9222 that is logged in as the routed client (`targetUser`, GM by default); errors if none matches.
 
 ### `record_video`
 Record a video of the Foundry game viewport using CDP screencast + ffmpeg. Captures whatever is visible in the observer Chrome (port 9223, 60fps GPU); falls back to the bridge Chromium (9222). Requires a Chrome target that produces continuous frames — headless bridge tabs produce none.
