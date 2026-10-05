@@ -225,7 +225,10 @@ async function renderFixtureOnce({ fixture, module, theme, width, state }) {
 // What a compare says about one theme: did the pixels move, did the check change.
 function compareVerdict(base, head) {
   if (base.error || head.error) return "not comparable — one side failed to render.";
-  const pixels = base.png && head.png && base.png.equals(head.png) ? "pixels identical" : "pixels differ";
+  // Byte equality is exact but one-sided: the harness is not fully deterministic
+  // (a checkout rendered against itself can differ), so "differ" means "look".
+  const same = base.png && head.png && base.png.equals(head.png);
+  const pixels = same ? "pixels identical" : "pixels differ (byte-level — not always a real change, compare the images)";
   const layout = base.check === head.check
     ? "layout check unchanged"
     : `layout check CHANGED\n  base: ${base.check.replace(/\n/g, " | ")}\n  head: ${head.check.replace(/\n/g, " | ")}`;

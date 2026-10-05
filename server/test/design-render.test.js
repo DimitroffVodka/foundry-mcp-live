@@ -233,7 +233,7 @@ test("renderFixtureReport compare: reports changed pixels and a changed layout c
     const t = out.content.at(-1).text;
     assert.match(t, /\[dark\] base check: narrow/);
     assert.match(t, /\[dark\] head check: wide/);
-    assert.match(t, /pixels differ; layout check CHANGED/);
+    assert.match(t, /pixels differ \(byte-level[^)]*\); layout check CHANGED/);
   } finally { fs.rmSync(rig.root, { recursive: true, force: true }); }
 });
 
