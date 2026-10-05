@@ -10,6 +10,7 @@ import {
   designRenderTarget,
   buildDesignRenderInvocation,
   validateDesignTarget,
+  fetchFixtureFragment,
   buildPreviewOpenExpression,
   buildPreviewCloseExpression,
   PREVIEW_WINDOW_ID,
@@ -154,5 +155,37 @@ test("cdpScreenshot with userId only attaches to the page logged in as that user
   } finally {
     wss.close();
     http.close();
+  }
+});
+
+test("validateDesignTarget lists fixtures when none is named and rejects a relative module", () => {
+  const root = fs.mkdtempSync(path.join(tmpdir(), "dh-"));
+  try {
+    fs.writeFileSync(path.join(root, "module.json"), "{}");
+    const fx = path.join(root, "tools", "design-harness", "fixtures");
+    fs.mkdirSync(fx, { recursive: true });
+    for (const f of ["alpha.mjs", "beta.mjs", "_helper.mjs"]) fs.writeFileSync(path.join(fx, f), "");
+    const none = validateDesignTarget({ module: root });
+    assert.match(none.error, /Pass a `fixture`/);
+    assert.match(none.error, /Available: alpha, beta\./);
+    assert.ok(!none.error.includes("_helper"));
+    assert.match(validateDesignTarget({ fixture: "alpha", module: "relative/dir" }).error, /absolute path/);
+    assert.ok(validateDesignTarget({ fixture: "alpha", module: root }).fixtureFile.endsWith("alpha.mjs"));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("fetchFixtureFragment fails fast with the harness's stderr when serve.mjs cannot start", async () => {
+  const dir = fs.mkdtempSync(path.join(tmpdir(), "dh-"));
+  try {
+    fs.writeFileSync(path.join(dir, "serve.mjs"), 'console.error("boom: bad config"); process.exit(3);');
+    const t0 = Date.now();
+    await withEnv(dir, () => assert.rejects(
+      fetchFixtureFragment({ fixture: "x" }, { timeoutMs: 10_000 }),
+      /exited with code 3[\s\S]*boom: bad config/));
+    assert.ok(Date.now() - t0 < 5_000, "should not wait out the full startup timeout");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

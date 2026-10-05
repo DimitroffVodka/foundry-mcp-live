@@ -6,14 +6,15 @@
  *   - `list_connected_bridges` — discovery affordance for `targetUser`
  *   - `reload_foundry`         — orchestrated reload + reconnect + ready wait
  */
-import { execFile }                          from "node:child_process";
+import { execFile, spawn }                   from "node:child_process";
+import { randomUUID }                        from "node:crypto";
 import { existsSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir, tmpdir }                   from "node:os";
 import path                                  from "node:path";
 import { promisify }                         from "node:util";
 import { z }                                 from "zod";
 import { bridges, lastSeenBridges, reconnectWaiters, routeBridge } from "../lib/bridges.js";
-import { FOUNDRY_URLS, RELAUNCH_CONFIG }    from "../lib/config.js";
+import { ALLOW_EVAL, FOUNDRY_URLS, RELAUNCH_CONFIG } from "../lib/config.js";
 import { diagnoseBridgeStatus }             from "../lib/bridge-status.js";
 import { relaunchClient }                   from "../lib/relaunch.js";
 import { requestFoundry }                   from "../lib/foundry-rpc.js";
@@ -71,7 +72,27 @@ export function buildDesignRenderInvocation({ fixture, module, theme, width, sta
   return { args, env };
 }
 
+function listFixtures(fixturesDir) {
+  return readdirSync(fixturesDir).filter(f => f.endsWith(".mjs") && !f.startsWith("_")).map(f => f.slice(0, -4));
+}
+
+// Sibling checkouts of the default module that carry their own harness — what a
+// model can pass as `module` without having to guess paths.
+function listHarnessModules() {
+  const parent = path.dirname(designRenderTarget({}).moduleDir);
+  try {
+    return readdirSync(parent, { withFileTypes: true })
+      .filter(d => d.isDirectory()
+        && existsSync(path.join(parent, d.name, "module.json"))
+        && existsSync(path.join(parent, d.name, "tools", "design-harness", "fixtures")))
+      .map(d => path.join(parent, d.name));
+  } catch { return []; }
+}
+
 export function validateDesignTarget({ fixture, module }) {
+  if (module && !path.isAbsolute(module)) {
+    return { error: `Error: \`module\` must be an absolute path to a module checkout root (got \`${module}\`).` };
+  }
   const { moduleDir, fixturesDir, fixtureFile } = designRenderTarget({ fixture, module });
   if (module && !existsSync(path.join(moduleDir, "module.json"))) {
     return { error: `Error: no module.json under ${moduleDir} — \`module\` must be a module checkout root.` };
@@ -80,10 +101,12 @@ export function validateDesignTarget({ fixture, module }) {
     return { error: `Error: no design harness in ${moduleDir} — expected ${fixturesDir}. `
       + `Pass a module checkout that has tools/design-harness, or install the harness there first.` };
   }
-  if (!existsSync(fixtureFile)) {
-    const avail = readdirSync(fixturesDir).filter(f => f.endsWith(".mjs") && !f.startsWith("_")).map(f => f.slice(0, -4));
-    return { error: `Error: no fixture \`${fixture}\` in ${fixturesDir}.`
-      + (avail.length ? ` Available: ${avail.slice(0, 25).join(", ")}${avail.length > 25 ? ` (+${avail.length - 25} more)` : ""}.` : "") };
+  if (!fixture || !existsSync(fixtureFile)) {
+    const avail = listFixtures(fixturesDir);
+    const mods = module ? [] : listHarnessModules().filter(m => m !== moduleDir);
+    return { error: (fixture ? `Error: no fixture \`${fixture}\` in ${fixturesDir}.` : `Pass a \`fixture\`. Module: ${moduleDir}.`)
+      + (avail.length ? ` Available: ${avail.slice(0, 25).join(", ")}${avail.length > 25 ? ` (+${avail.length - 25} more)` : ""}.` : "")
+      + (mods.length ? ` Other modules with a harness (pass as \`module\`): ${mods.slice(0, 8).join(", ")}${mods.length > 8 ? ` (+${mods.length - 8} more)` : ""}.` : "") };
   }
   return { moduleDir, fixturesDir, fixtureFile };
 }
@@ -146,22 +169,31 @@ export async function fetchFixtureFragment({ fixture, module, state }, { timeout
   const port = 41000 + Math.floor(Math.random() * 8000);
   const env = { ...process.env, PORT: String(port) };
   if (module) env.MODULE_DIR = path.resolve(module);
-  const child = execFile(process.execPath, [path.join(designHarnessDir(), "serve.mjs")], { env, cwd: homedir() });
+  const child = spawn(process.execPath, [path.join(designHarnessDir(), "serve.mjs")],
+    { env, cwd: homedir(), stdio: ["ignore", "ignore", "pipe"] });
+  let died = null;
+  let stderr = "";
+  child.stderr.on("data", (d) => { stderr = (stderr + d).slice(-2000); });
+  child.on("error", (err) => { died = err.message; });
+  child.on("exit", (code) => { died ??= `exited with code ${code}`; });
   try {
     const base = `http://127.0.0.1:${port}`;
     const deadline = Date.now() + timeoutMs;
     let ready = false;
-    while (Date.now() < deadline) {
-      try { const probe = await fetch(`${base}/.harness`); if (probe.ok) { ready = true; break; } } catch { /* not up yet */ }
+    while (!died && Date.now() < deadline) {
+      try { const probe = await fetch(`${base}/.harness`, { signal: AbortSignal.timeout(2000) }); if (probe.ok) { ready = true; break; } } catch { /* not up yet */ }
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    if (!ready) throw new Error(`design harness did not start on port ${port} within ${timeoutMs}ms`);
+    if (!ready) {
+      throw new Error(`design harness did not start on port ${port}${died ? ` (${died})` : ` within ${timeoutMs}ms`}`
+        + (stderr.trim() ? `:\n${stderr.trim().split("\n").slice(-6).join("\n")}` : ""));
+    }
     const url = `${base}/w/${encodeURIComponent(fixture)}?frag=1${state ? `&state=${encodeURIComponent(state)}` : ""}`;
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) throw new Error(`harness fragment request failed: HTTP ${res.status}`);
     return await res.json();
   } finally {
-    try { child.kill(); } catch { /* already gone */ }
+    try { child.kill("SIGKILL"); } catch { /* already gone */ }
   }
 }
 
@@ -423,8 +455,9 @@ export function registerServerLocalTools(mcp) {
       + "live-world counterpart; theme 'both' renders dark and light in one call. Present only when a design harness is installed on this host "
       + "(FOUNDRY_DESIGN_HARNESS overrides the default path); needs chromium on the host.",
       {
-        fixture: z.string().regex(/^[\w-]+$/).describe(
-          "Fixture name — a file in the module's tools/design-harness/fixtures/, without .mjs."
+        fixture: z.string().regex(/^[\w-]+$/).optional().describe(
+          "Fixture name — a file in the module's tools/design-harness/fixtures/, without .mjs. "
+          + "Omit to list the available fixtures (and other modules that have a harness)."
         ),
         module: z.string().optional().describe(
           "Absolute path to the module checkout to render (any Foundry module). "
@@ -443,10 +476,11 @@ export function registerServerLocalTools(mcp) {
         if (target.error) return { content: [{ type: "text", text: target.error }] };
         const { moduleDir } = target;
         const themes = theme === "both" ? ["dark", "light"] : [theme ?? "dark"];
-        const images = [];
+        const parts = [];
         const notes = [];
+        let rendered = 0;
         for (const t of themes) {
-          const outPng = path.join(tmpdir(), `design-fixture-${fixture}-${t}-${Date.now()}.png`);
+          const outPng = path.join(tmpdir(), `design-fixture-${fixture}-${t}-${randomUUID()}.png`);
           const inv = buildDesignRenderInvocation({ fixture, module, theme: t, width, state }, outPng);
           try {
             const { stdout } = await execFileAsync(process.execPath, inv.args,
@@ -456,7 +490,9 @@ export function registerServerLocalTools(mcp) {
               .filter(l => l.trim() && !l.startsWith("design harness:") && l.trim() !== outPng)
               .join("\n").trim();
             if (existsSync(outPng)) {
-              images.push({ type: "image", data: readFileSync(outPng).toString("base64"), mimeType: "image/png" });
+              parts.push({ type: "text", text: `[${t}]` },
+                { type: "image", data: readFileSync(outPng).toString("base64"), mimeType: "image/png" });
+              rendered++;
             }
             if (!check || check.startsWith("(no check ran)")) {
               notes.push(`[${t}] render failed — no layout check was produced (the image, if any, is likely the harness error page). On the server host run: node ${path.join(designHarnessDir(), "shot.mjs")} ${fixture} — it prints the stack.`);
@@ -470,10 +506,15 @@ export function registerServerLocalTools(mcp) {
             try { unlinkSync(outPng); } catch { /* already gone */ }
           }
         }
-        const head = `Rendered \`${fixture}\` from ${moduleDir} (${themes.join("+")})${width ? ` at ${width}px` : ""} — ${images.length} image(s).`;
-        return { content: [...images, { type: "text", text: `${head}\n${notes.join("\n")}` }] };
+        const head = `Rendered \`${fixture}\` from ${moduleDir} (${themes.join("+")})${width ? ` at ${width}px` : ""} — ${rendered} image(s).`;
+        return { content: [...parts, { type: "text", text: `${head}\n${notes.join("\n")}` }] };
       });
 
+  }
+
+  // preview_fixture runs client JS through the bridge's evaluate action, so it
+  // honours the FOUNDRY_MCP_ALLOW_EVAL=0 opt-out the same way `evaluate` does.
+  if (designHarnessReady() && ALLOW_EVAL) {
     registerRawTool(mcp, "preview_fixture",
       "Open a design-harness fixture as a REAL window inside a live Foundry client: the same compiled "
       + "markup and CSS the harness renders offline, but shown in the actual session so the real cascade, "
@@ -485,7 +526,7 @@ export function registerServerLocalTools(mcp) {
       + "(FOUNDRY_DESIGN_HARNESS overrides the default path).",
       {
         fixture: z.string().regex(/^[\w-]+$/).optional().describe(
-          "Fixture name — a file in the module's tools/design-harness/fixtures/, without .mjs. Required unless close:true."
+          "Fixture name — a file in the module's tools/design-harness/fixtures/, without .mjs. Required unless close:true (omit to list the available ones)."
         ),
         module: z.string().optional().describe(
           "Absolute path to the module checkout to render (any Foundry module). Default: the harness's own module."
@@ -551,10 +592,12 @@ export function registerServerLocalTools(mcp) {
           // user), and say which was used.
           let shot = null;
           let exact = false;
+          let cdpWhy = "";
           try {
             const cdp = await cdpScreenshot(`#${PREVIEW_WINDOW_ID}`, { scale: 2, format: "png", userId: targetUserId });
             if (cdp && !cdp.error) { shot = { image: cdp.image, mimeType: cdp.mimeType }; exact = true; }
-          } catch { /* no debugger port — fall through to html2canvas */ }
+            else cdpWhy = cdp?.error ?? "";
+          } catch (err) { cdpWhy = err.message; /* no usable debugger page — fall through to html2canvas */ }
           if (!shot) {
             shot = await requestFoundry("screenshot_dom",
               { selector: `#${PREVIEW_WINDOW_ID}`, scale: 1, format: "png" }, targetUserId);
@@ -564,7 +607,7 @@ export function registerServerLocalTools(mcp) {
               { type: "image", data: shot.image, mimeType: shot.mimeType ?? "image/png" },
               { type: "text", text:
                 `Previewed \`${fixture}\` on ${bridge.userName} — live Foundry cascade (client's own theme), `
-                + (exact ? "CDP real pixels" : "html2canvas fallback — text baselines approximate") + ". "
+                + (exact ? "CDP real pixels" : `html2canvas fallback — text baselines approximate${cdpWhy ? ` (CDP: ${cdpWhy})` : ""}`) + ". "
                 + `Window LEFT OPEN (id ${PREVIEW_WINDOW_ID}); close it with preview_fixture {close:true} or its ✕.`
                 + missingNote },
             ] };
