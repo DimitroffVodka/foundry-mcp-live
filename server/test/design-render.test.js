@@ -118,5 +118,41 @@ test("preview expressions carry the fixture safely and share one window id", () 
 test("the preview capture prefers CDP real pixels and flags the html2canvas fallback", () => {
   const src = fs.readFileSync(new URL("../tools/server-local.js", import.meta.url), "utf8");
   assert.ok(src.includes("cdpScreenshot(`#${PREVIEW_WINDOW_ID}`"));
+  assert.ok(src.includes("userId: targetUserId"));
   assert.ok(src.includes("html2canvas fallback — text baselines approximate"));
+});
+
+test("cdpScreenshot with userId only attaches to the page logged in as that user", async () => {
+  const { createServer } = await import("node:http");
+  const { WebSocketServer } = await import("ws");
+  const { cdpScreenshot } = await import("../lib/cdp-screenshot.js");
+  const attached = [];
+  const http = createServer();
+  const wss = new WebSocketServer({ server: http });
+  await new Promise(r => http.listen(0, "127.0.0.1", r));
+  const port = http.address().port;
+  const users = { "/a": "userA", "/b": "userB" };
+  http.on("request", (req, res) => {
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(["/a", "/b"].map(p => ({
+      type: "page", url: "http://foundry/game",
+      webSocketDebuggerUrl: `ws://127.0.0.1:${port}${p}` }))));
+  });
+  wss.on("connection", (ws, req) => ws.on("message", raw => {
+    const { id, params } = JSON.parse(raw);
+    if (params.expression === "game?.user?.id ?? null") {
+      return ws.send(JSON.stringify({ id, result: { result: { value: users[req.url] } } }));
+    }
+    attached.push(req.url); // the capture's own evaluate reached this page
+    ws.send(JSON.stringify({ id, result: { result: { value: { error: "stop here" } } } }));
+  }));
+  try {
+    const hit = await cdpScreenshot("#x", { userId: "userB", ports: [port] });
+    assert.equal(hit.error, "stop here");
+    assert.deepEqual(attached, ["/b"]);
+    await assert.rejects(cdpScreenshot("#x", { userId: "nobody", ports: [port] }), /logged in as bridge user nobody/);
+  } finally {
+    wss.close();
+    http.close();
+  }
 });

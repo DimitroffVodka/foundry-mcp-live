@@ -36,23 +36,37 @@ function cdpSend(ws, method, params = {}, id = 1, timeoutMs = 15000) {
   });
 }
 
-async function getPageWs() {
-  for (const port of PORTS) {
-    try {
-      const targets = await fetchJson(`http://127.0.0.1:${port}/json`);
-      const page = targets.find(t => t.type === "page" && t.url?.startsWith("http"));
-      if (!page) continue;
-      const ws = new WebSocket(page.webSocketDebuggerUrl);
-      await new Promise((resolve, reject) => {
-        ws.addEventListener("open", resolve);
-        ws.addEventListener("error", reject);
-      });
-      return ws;
-    } catch {
-      // port not available, try next
+async function openWs(page) {
+  const ws = new WebSocket(page.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    ws.addEventListener("open", resolve);
+    ws.addEventListener("error", reject);
+  });
+  return ws;
+}
+
+// With `userId`, only a page whose Foundry session is that user qualifies —
+// otherwise the first http page wins, which may be a different client/world.
+async function getPageWs(userId, ports = PORTS) {
+  for (const port of ports) {
+    let targets;
+    try { targets = await fetchJson(`http://127.0.0.1:${port}/json`); }
+    catch { continue; } // port not available, try next
+    for (const page of targets.filter(t => t.type === "page" && t.url?.startsWith("http"))) {
+      let ws;
+      try {
+        ws = await openWs(page);
+        if (!userId) return ws;
+        const r = await cdpSend(ws, "Runtime.evaluate",
+          { expression: "game?.user?.id ?? null", returnByValue: true }, 1, 3000);
+        if (r.result?.value === userId) return ws;
+        ws.close();
+      } catch { ws?.close(); }
     }
   }
-  throw new Error("No CDP target found on ports " + PORTS.join(" or "));
+  throw new Error(userId
+    ? `No CDP target on ports ${ports.join(" or ")} is logged in as bridge user ${userId}`
+    : "No CDP target found on ports " + ports.join(" or "));
 }
 
 /**
@@ -62,6 +76,8 @@ async function getPageWs() {
  * @param {object} [opts]
  * @param {number} [opts.scale=2] - device pixel ratio for the capture
  * @param {string} [opts.format='png'] - 'png' or 'jpeg'
+ * @param {number[]} [opts.ports] - debugger ports to probe (tests); default observer then bridge
+ * @param {string} [opts.userId] - Foundry user id of the bridge the capture must come from
  * @param {number} [opts.quality] - JPEG quality 0-1
  * @returns {{ image: string, mimeType: string, width: number, height: number,
  *             selector: string, element: { tag, class, id } }}
@@ -72,7 +88,7 @@ export async function cdpScreenshot(selector, opts = {}) {
   const quality = opts.quality;
   const mime    = `image/${format}`;
 
-  const ws = await getPageWs();
+  const ws = await getPageWs(opts.userId, opts.ports);
 
   try {
     // Dismiss error overlays, open sheet if needed, scroll element into view,

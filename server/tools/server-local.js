@@ -547,11 +547,12 @@ export function registerServerLocalTools(mcp) {
           // Real pixels via CDP first: html2canvas re-renders text off its
           // baseline (initiative numbers and button labels read low in its
           // output), which misleads a design read. Fall back to it only when
-          // no debugger port answers, and say which was used.
+          // no debugger port answers (or none is logged in as the routed bridge's
+          // user), and say which was used.
           let shot = null;
           let exact = false;
           try {
-            const cdp = await cdpScreenshot(`#${PREVIEW_WINDOW_ID}`, { scale: 2, format: "png" });
+            const cdp = await cdpScreenshot(`#${PREVIEW_WINDOW_ID}`, { scale: 2, format: "png", userId: targetUserId });
             if (cdp && !cdp.error) { shot = { image: cdp.image, mimeType: cdp.mimeType }; exact = true; }
           } catch { /* no debugger port — fall through to html2canvas */ }
           if (!shot) {
