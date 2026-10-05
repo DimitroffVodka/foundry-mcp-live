@@ -417,6 +417,31 @@ Record a video of the Foundry game viewport using CDP screencast + ffmpeg. Captu
 - **Params**: `duration` (required, 1–60, default 10), `fps?` (1–30, default 10), `quality?` (1–100, default 85), `maxWidth?` (default 1280), `maxHeight?` (default 720), `output?`.
 - **Returns**: `Video recorded: <path> — N frames, X.X MB` or `Recording failed: <reason>`.
 
+### `render_fixture` (server-local; present when a design harness is installed)
+Render a **design-harness fixture** to a PNG in a Foundry v14 window frame with **no world running** — core CSS, the game system's CSS and a module's stylesheets — and return the harness's layout check alongside the image. This is the offline design-review loop for any module checkout; `screenshot` is its live-world counterpart.
+
+Registers only when a design harness exists on the server host (default `~/git/shadowdark-enhancer/tools/design-harness`; override with `FOUNDRY_DESIGN_HARNESS`). Needs `chromium` (or `google-chrome`) on the host.
+
+- **Params**:
+  - `fixture` (required) — fixture file name (no `.mjs`) under `<module>/tools/design-harness/fixtures/`.
+  - `module?` — absolute path to a module checkout root to render; default: the harness's own module.
+  - `state?` — named fixture state (for fixtures with `build(state)`).
+  - `theme?` — `"dark"` (default), `"light"`, or `"both"` (two renders, both images — light is where most design misses happen).
+  - `width?` — force the window width in px (e.g. `420`).
+- **Returns**: one **image** (PNG) per rendered theme plus a text block with the module, theme/width and the per-theme layout check (`visible buttons`, `primary`, overflow/tiny-control problems, and any missing string keys). A failed render says so instead of a junk check (run `shot.mjs` on the host for the stack); a bad fixture or module errors with the available names.
+
+
+### `preview_fixture` (server-local; present when a design harness is installed)
+Open a design-harness fixture as a **real window inside a live Foundry client** — the offline harness replica can disagree with the live cascade (it cannot model the client's unlayered stylesheet re-injection), so this is the look at the truth before a window ships. Renders the fixture's parts plus its own css (proposal fixtures bring the kit), opens (or replaces) one preview window (id `mcp-fixture-preview`), screenshots it back (**CDP real pixels** when a Chrome debugger port answers; an html2canvas fallback — flagged in the reply, and its text baselines are approximate — otherwise), and **leaves it open for inspection**.
+
+- **Params**:
+  - `fixture` (required unless `close:true`) — fixture file name (no `.mjs`).
+  - `module?` — module checkout root to render; default: the harness's own module.
+  - `state?` — named fixture state.
+  - `width?` — override the window width in px; default: the fixture's own width (else 600).
+  - `close?` — close the preview window and return instead of opening.
+  - `targetUser?` — which connected client shows the preview (GM by default).
+- **Returns**: a PNG screenshot of the open window plus a text line (target client, capture method, missing string keys if any). A screenshot failure still leaves the window open and says so. Nothing is persisted; no world documents change.
 ---
 
 ## Dice & items
