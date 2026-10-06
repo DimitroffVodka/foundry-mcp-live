@@ -16,37 +16,36 @@
  *   - tools/_helpers.js + lib/* — NOT cache-busted (transitively cached
  *     once on first import). Edit those and restart the server.
  */
+const TOOL_MODULES = [
+  ["world.js", "registerWorldTools"],
+  ["canvas.js", "registerCanvasTools"],
+  ["runtime.js", "registerRuntimeTools"],
+  ["tracing.js", "registerTracingTools"],
+  ["dice.js", "registerDiceTools"],
+  ["snapshot.js", "registerSnapshotTools"],
+  ["server-local.js", "registerServerLocalTools"],
+  ["world-authoring.js", "registerWorldAuthoringTools"],
+  ["recorder.js", "registerRecorderTools"],
+];
+
+/**
+ * Import each tools module, isolating failures: a module that cannot load (a
+ * bad edit, or a hot-reloaded tool importing a name that the cached, non-reloaded
+ * lib/ does not have yet) costs only ITS tools, not every tool on every session.
+ */
+export async function loadRegistrars(table, importer) {
+  return Promise.all(table.map(async ([file, name]) => {
+    try { return (await importer(file))[name]; }
+    catch (err) {
+      console.error(`[foundry-mcp] tools/${file} failed to load — its tools are unavailable until it is fixed`
+        + `${/does not provide an export/.test(err.message) ? " (lib/ is not hot-reloaded: restart the server)" : ""}: ${err.message}`);
+      return () => {};
+    }
+  }));
+}
+
 export async function registerTools(mcp) {
   const cb = `?t=${Date.now()}`;
-  const [
-    { registerWorldTools },
-    { registerCanvasTools },
-    { registerRuntimeTools },
-    { registerTracingTools },
-    { registerDiceTools },
-    { registerSnapshotTools },
-    { registerServerLocalTools },
-    { registerWorldAuthoringTools },
-    { registerRecorderTools },
-  ] = await Promise.all([
-    import("./world.js" + cb),
-    import("./canvas.js" + cb),
-    import("./runtime.js" + cb),
-    import("./tracing.js" + cb),
-    import("./dice.js" + cb),
-    import("./snapshot.js" + cb),
-    import("./server-local.js" + cb),
-    import("./world-authoring.js" + cb),
-    import("./recorder.js" + cb),
-  ]);
-
-  registerWorldTools(mcp);
-  registerCanvasTools(mcp);
-  registerRuntimeTools(mcp);
-  registerTracingTools(mcp);
-  registerDiceTools(mcp);
-  registerSnapshotTools(mcp);
-  registerServerLocalTools(mcp);
-  registerWorldAuthoringTools(mcp);
-  registerRecorderTools(mcp);
+  const registrars = await loadRegistrars(TOOL_MODULES, (file) => import(`./${file}${cb}`));
+  for (const register of registrars) register(mcp);
 }
