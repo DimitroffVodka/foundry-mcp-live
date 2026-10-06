@@ -136,13 +136,15 @@ test("cropToContent crops to the window plus a margin and ignores the check-over
 });
 
 test("cropToContent measures only the indices asked for, so a dimmed diff image does not widen the crop", () => {
+  // A realistic page: the ignored check-overlay corner (376x320) must sit in the bottom-right, not cover the canvas.
+  const W = 1000, H = 900;
   const win = (x, y) => (x >= 50 && x < 80 && y >= 40 && y < 70 ? [200, 20, 20] : [30, 30, 30]);
   const dimmed = (x, y) => (x >= 50 && x < 80 && y >= 40 && y < 70 ? [70, 7, 7] : [10, 10, 10]); // background no longer gray
-  const [head, diff] = cropToContent([encodePng(500, 300, 3, win), encodePng(500, 300, 3, dimmed)], { measure: [0] });
+  const [head, diff] = cropToContent([encodePng(W, H, 3, win), encodePng(W, H, 3, dimmed)], { measure: [0] });
   assert.deepEqual([decodePng(head).width, decodePng(head).height], [54, 54]);
   assert.deepEqual([decodePng(diff).width, decodePng(diff).height], [54, 54]);
-  const [, wide] = cropToContent([encodePng(500, 300, 3, win), encodePng(500, 300, 3, dimmed)]);
-  assert.equal(decodePng(wide).width, 500 - 0, "unmeasured default would have kept the whole page");
+  const [, wide] = cropToContent([encodePng(W, H, 3, win), encodePng(W, H, 3, dimmed)]);
+  assert.equal(decodePng(wide).width, W, "unmeasured default would have kept the whole page width");
 });
 
 test("cropToContent passes through what it cannot crop", () => {

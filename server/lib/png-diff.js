@@ -155,7 +155,7 @@ const isBackground = (r, g, b) => Math.max(r, g, b) - Math.min(r, g, b) <= 1 && 
  * @param {number[]} [opts.measure]  which indices define the crop (default all); the rest are cropped
  *   to the same rectangle — a dimmed diff image must not be measured, its background is no longer gray
  */
-export function cropToContent(pngs, { margin = 12, overlayW = 376, overlayH = 160, measure } = {}) {
+export function cropToContent(pngs, { margin = 12, overlayW = 376, overlayH = 320, measure } = {}) {
   const decoded = pngs.map((b) => (b ? decodePng(b) : null));
   const real = decoded.filter(Boolean);
   if (!real.length || real.some((d) => d.width !== real[0].width || d.height !== real[0].height)) return pngs;
