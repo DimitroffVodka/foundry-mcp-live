@@ -19,6 +19,7 @@ import { diagnoseBridgeStatus }             from "../lib/bridge-status.js";
 import { relaunchClient }                   from "../lib/relaunch.js";
 import { requestFoundry }                   from "../lib/foundry-rpc.js";
 import { cdpScreenshot }                    from "../lib/cdp-screenshot.js";
+import { diffPng }                          from "../lib/png-diff.js";
 import { relayClients }                     from "../lib/relay-runtime.js";
 import { registerRawTool, TARGET_USER_DESC } from "./_helpers.js";
 
@@ -222,17 +223,26 @@ async function renderFixtureOnce({ fixture, module, theme, width, state }) {
   }
 }
 
+// Byte equality is exact but too strict: a checkout rendered against itself can
+// differ by ±1 on a few anti-aliased corner pixels. Decode and count real
+// movement instead; fall back to byte equality for PNGs we cannot decode.
+function pixelVerdict(base, head) {
+  if (base.png.equals(head.png)) return "pixels identical";
+  const d = diffPng(base.png, head.png);
+  if (!d) return "pixels differ (byte-level; images not decodable for a finer diff)";
+  if (d.sizeChanged) return `size changed ${d.a} -> ${d.b}`;
+  if (!d.changed) return "pixels identical (within anti-aliasing noise)";
+  const pct = d.changed / d.total * 100;
+  return `${d.changed} px changed (${pct < 0.01 ? "<0.01" : pct.toFixed(2)}%), in a ${d.bbox.w}x${d.bbox.h} area at ${d.bbox.x},${d.bbox.y}`;
+}
+
 // What a compare says about one theme: did the pixels move, did the check change.
-function compareVerdict(base, head) {
-  if (base.error || head.error) return "not comparable — one side failed to render.";
-  // Byte equality is exact but one-sided: the harness is not fully deterministic
-  // (a checkout rendered against itself can differ), so "differ" means "look".
-  const same = base.png && head.png && base.png.equals(head.png);
-  const pixels = same ? "pixels identical" : "pixels differ (byte-level — not always a real change, compare the images)";
+export function compareVerdict(base, head) {
+  if (base.error || head.error || !base.png || !head.png) return "not comparable — one side failed to render.";
   const layout = base.check === head.check
     ? "layout check unchanged"
     : `layout check CHANGED\n  base: ${base.check.replace(/\n/g, " | ")}\n  head: ${head.check.replace(/\n/g, " | ")}`;
-  return `${pixels}; ${layout}`;
+  return `${pixelVerdict(base, head)}; ${layout}`;
 }
 
 export async function renderFixtureReport({ fixture, module, against, state, theme, width }) {
