@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import * as zlib from "node:zlib";
 import { deflateSync } from "node:zlib";
 
-import { decodePng, diffPng } from "../lib/png-diff.js";
-import { compareVerdict } from "../tools/server-local.js";
+import { decodePng, diffPng, encodePng as libEncodePng } from "../lib/png-diff.js";
+import { compareVerdict, compareRuns } from "../tools/server-local.js";
 
 // Encoder for tests only. The decoder never checks CRCs, so they are zeroed.
 const paeth = (a, b, c) => {
@@ -79,4 +80,43 @@ test("compareVerdict reads noise as identical and real movement as a changed-pix
   assert.match(compareVerdict(side(flat), side(encodePng(100, 90, 3, () => [40, 40, 40]))), /^size changed 100x100 -> 100x90;/);
   assert.match(compareVerdict(side(flat, "a"), side(flat, "b")), /layout check CHANGED\n  base: a\n  head: b$/);
   assert.match(compareVerdict(side(flat), { png: null, check: null, error: "x" }), /not comparable/);
+});
+
+test("encodePng writes a valid PNG: it decodes back and every chunk CRC is right", () => {
+  const data = Buffer.from(Array.from({ length: 6 * 4 }, (_, i) => [i * 10 & 255, i * 7 & 255, 200, 255]).flat());
+  const png = libEncodePng(6, 4, 4, data);
+  const d = decodePng(png);
+  assert.deepEqual([d.width, d.height, d.channels], [6, 4, 4]);
+  assert.ok(d.data.equals(data));
+  if (typeof zlib.crc32 === "function") {
+    for (let pos = 8; pos < png.length;) {
+      const len = png.readUInt32BE(pos);
+      assert.equal(png.readUInt32BE(pos + 8 + len), zlib.crc32(png.subarray(pos + 4, pos + 8 + len)), png.toString("latin1", pos + 4, pos + 8));
+      pos += 12 + len;
+    }
+  }
+});
+
+test("diffPng highlight marks changed pixels red, outlines their box, dims the rest", () => {
+  const base = encodePng(20, 10, 3, () => [40, 40, 40]);
+  const moved = encodePng(20, 10, 3, (x, y) => (x >= 5 && x < 8 && y >= 2 && y < 4 ? [200, 40, 40] : [40, 40, 40]));
+  assert.equal("highlight" in diffPng(base, moved), false, "off unless asked for");
+  const d = diffPng(base, moved, { highlight: true });
+  assert.equal(d.changed, 6);
+  const h = decodePng(d.highlight), at = (x, y) => [...h.data.subarray((y * 20 + x) * 3, (y * 20 + x) * 3 + 3)];
+  assert.deepEqual(at(5, 2), [255, 0, 60]);   // a changed pixel
+  assert.deepEqual(at(3, 0), [255, 214, 0]);  // box corner: bbox 5,2 3x2 padded by 2
+  assert.deepEqual(at(9, 5), [255, 214, 0]);  // opposite corner
+  assert.deepEqual(at(15, 8), [14, 14, 14]);  // untouched pixel, dimmed to 35%
+  assert.equal("highlight" in diffPng(base, base, { highlight: true }), false, "nothing changed, nothing to show");
+});
+
+test("compareRuns carries the highlight only when pixels really moved", () => {
+  const side = (png) => ({ png, check: "c", error: null });
+  const flat = encodePng(30, 30, 3, () => [40, 40, 40]);
+  const block = encodePng(30, 30, 3, (x, y) => (x < 4 && y < 4 ? [250, 0, 0] : [40, 40, 40]));
+  const noisy = encodePng(30, 30, 3, (x, y) => (!x && !y ? [41, 40, 40] : [40, 40, 40]));
+  assert.ok(Buffer.isBuffer(compareRuns(side(flat), side(block)).highlight));
+  assert.equal(compareRuns(side(flat), side(noisy)).highlight, undefined);
+  assert.equal(compareRuns(side(flat), side(flat)).highlight, undefined);
 });

@@ -226,24 +226,30 @@ async function renderFixtureOnce({ fixture, module, theme, width, state }) {
 // Byte equality is exact but too strict: a checkout rendered against itself can
 // differ by ±1 on a few anti-aliased corner pixels. Decode and count real
 // movement instead; fall back to byte equality for PNGs we cannot decode.
+// `highlight` is a PNG showing where the pixels moved, when some did.
 function pixelVerdict(base, head) {
-  if (base.png.equals(head.png)) return "pixels identical";
-  const d = diffPng(base.png, head.png);
-  if (!d) return "pixels differ (byte-level; images not decodable for a finer diff)";
-  if (d.sizeChanged) return `size changed ${d.a} -> ${d.b}`;
-  if (!d.changed) return "pixels identical (within anti-aliasing noise)";
+  if (base.png.equals(head.png)) return { text: "pixels identical" };
+  const d = diffPng(base.png, head.png, { highlight: true });
+  if (!d) return { text: "pixels differ (byte-level; images not decodable for a finer diff)" };
+  if (d.sizeChanged) return { text: `size changed ${d.a} -> ${d.b}` };
+  if (!d.changed) return { text: "pixels identical (within anti-aliasing noise)" };
   const pct = d.changed / d.total * 100;
-  return `${d.changed} px changed (${pct < 0.01 ? "<0.01" : pct.toFixed(2)}%), in a ${d.bbox.w}x${d.bbox.h} area at ${d.bbox.x},${d.bbox.y}`;
+  return {
+    text: `${d.changed} px changed (${pct < 0.01 ? "<0.01" : pct.toFixed(2)}%), in a ${d.bbox.w}x${d.bbox.h} area at ${d.bbox.x},${d.bbox.y}`,
+    highlight: d.highlight,
+  };
 }
 
 // What a compare says about one theme: did the pixels move, did the check change.
-export function compareVerdict(base, head) {
-  if (base.error || head.error || !base.png || !head.png) return "not comparable — one side failed to render.";
+export function compareRuns(base, head) {
+  if (base.error || head.error || !base.png || !head.png) return { text: "not comparable — one side failed to render." };
   const layout = base.check === head.check
     ? "layout check unchanged"
     : `layout check CHANGED\n  base: ${base.check.replace(/\n/g, " | ")}\n  head: ${head.check.replace(/\n/g, " | ")}`;
-  return `${pixelVerdict(base, head)}; ${layout}`;
+  const pixels = pixelVerdict(base, head);
+  return { text: `${pixels.text}; ${layout}`, highlight: pixels.highlight };
 }
+export const compareVerdict = (base, head) => compareRuns(base, head).text;
 
 export async function renderFixtureReport({ fixture, module, against, state, theme, width }) {
   const text = (t) => ({ content: [{ type: "text", text: t }] });
@@ -283,7 +289,13 @@ export async function renderFixtureReport({ fixture, module, against, state, the
     const baseRun = await renderFixtureOnce({ fixture, module: against, theme: t, width, state });
     show(`[${t}] base`, baseRun);
     show(`[${t}] head`, headRun);
-    notes.push(`[${t}] ${compareVerdict(baseRun, headRun)}`);
+    const verdict = compareRuns(baseRun, headRun);
+    if (verdict.highlight) {
+      parts.push({ type: "text", text: `[${t}] diff — changed pixels red, their bounding box yellow, head render dimmed` },
+        { type: "image", data: verdict.highlight.toString("base64"), mimeType: "image/png" });
+      images++;
+    }
+    notes.push(`[${t}] ${verdict.text}`);
   }
   const summary = against
     ? `Compared \`${fixture}\`: base ${path.resolve(against)} vs head ${head.moduleDir}`

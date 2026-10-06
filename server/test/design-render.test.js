@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { homedir, tmpdir } from "node:os";
 import fs from "node:fs";
 import path from "node:path";
+import { encodePng } from "../lib/png-diff.js";
 
 import {
   designHarnessDir,
@@ -218,7 +219,7 @@ function fakeCompareRig({ headLook, baseLook, baseHasFixture = true }) {
     import fs from "node:fs"; import path from "node:path";
     const dir = process.env.MODULE_DIR ?? path.resolve(import.meta.dirname, "../..");
     const look = fs.readFileSync(path.join(dir, "look.txt"), "utf8");
-    fs.writeFileSync(process.argv[3], look);
+    fs.writeFileSync(process.argv[3], look.startsWith("b64:") ? Buffer.from(look.slice(4), "base64") : look);
     console.log("design harness: fake");
     console.log(process.argv[3]);
     console.log("check: " + look);`);
@@ -266,5 +267,22 @@ test("renderFixtureReport without against keeps the plain single-render shape", 
     assert.deepEqual(out.content.map(c => c.type), ["text", "image", "text"]);
     assert.equal(out.content[0].text, "[dark]");
     assert.match(out.content.at(-1).text, /^Rendered `a` from .*head \(dark\) — 1 image/);
+  } finally { fs.rmSync(rig.root, { recursive: true, force: true }); }
+});
+
+test("renderFixtureReport compare adds a highlight image when the pixels really moved", async () => {
+  const solid = (r) => "b64:" + encodePng(16, 16, 3, Buffer.alloc(16 * 16 * 3, 0).map((_, i) => (i % 3 === 0 && i < 3 * 16 * 4 ? r : 40))).toString("base64");
+  const rig = fakeCompareRig({ headLook: solid(250), baseLook: solid(40) });
+  try {
+    const out = await withEnvAsync(rig.harness, () => renderFixtureReport({ fixture: "a", against: rig.base }));
+    assert.equal(out.content.filter(c => c.type === "image").length, 3, "base, head, diff");
+    const labels = out.content.filter(c => c.type === "text").map(c => c.text);
+    assert.ok(labels.some(l => /^\[dark\] diff — changed pixels red/.test(l)));
+    assert.match(out.content.at(-1).text, /\d+ px changed \(/);
+    const same = fakeCompareRig({ headLook: solid(40), baseLook: solid(40) });
+    try {
+      const flat = await withEnvAsync(same.harness, () => renderFixtureReport({ fixture: "a", against: same.base }));
+      assert.equal(flat.content.filter(c => c.type === "image").length, 2, "no diff image when nothing moved");
+    } finally { fs.rmSync(same.root, { recursive: true, force: true }); }
   } finally { fs.rmSync(rig.root, { recursive: true, force: true }); }
 });

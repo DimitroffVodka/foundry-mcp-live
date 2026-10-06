@@ -4,11 +4,14 @@
  * differ by a few ±1 pixels at anti-aliased corners, which byte equality
  * reports as a change.
  *
+ * It can also write a highlight image (the head render dimmed, changed pixels
+ * in red, their bounding box outlined) so a reader can see WHERE it moved.
+ *
  * Handles what Chromium screenshots are: 8-bit RGB / RGBA, non-interlaced.
  * Anything else decodes to null and the caller falls back to byte equality.
  * Chunk CRCs are not checked — the bytes come straight from our own render.
  */
-import { inflateSync } from "node:zlib";
+import { deflateSync, inflateSync } from "node:zlib";
 
 const SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -56,14 +59,64 @@ export function decodePng(buf) {
   return { width, height, channels, data };
 }
 
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+function crc32(buf) {
+  let c = 0xffffffff;
+  for (const byte of buf) c = CRC_TABLE[(c ^ byte) & 255] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+function chunk(type, body) {
+  const out = Buffer.alloc(12 + body.length);
+  out.writeUInt32BE(body.length, 0);
+  out.write(type, 4, "latin1");
+  body.copy(out, 8);
+  out.writeUInt32BE(crc32(out.subarray(4, 8 + body.length)), 8 + body.length);
+  return out;
+}
+/** Encode 8-bit RGB (channels 3) or RGBA (4) pixel data as a PNG, filter 0. */
+export function encodePng(width, height, channels, data) {
+  const stride = width * channels, rows = Buffer.alloc(height * (stride + 1));
+  for (let y = 0; y < height; y++) data.copy(rows, y * (stride + 1) + 1, y * stride, (y + 1) * stride);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; ihdr[9] = channels === 4 ? 6 : 2;
+  return Buffer.concat([SIGNATURE, chunk("IHDR", ihdr), chunk("IDAT", deflateSync(rows)), chunk("IEND", Buffer.alloc(0))]);
+}
+
+// The head render at 35% brightness so the changed pixels stand out, changed
+// pixels in red, and a 2px-padded yellow box round the lot (single pixels are
+// otherwise invisible in a downscaled view).
+function highlight(head, mask, bbox) {
+  const { width, height, channels, data } = head;
+  const out = Buffer.from(data);
+  for (let o = 0; o < out.length; o += channels) {
+    out[o] = out[o] * 0.35; out[o + 1] = out[o + 1] * 0.35; out[o + 2] = out[o + 2] * 0.35;
+  }
+  const put = (x, y, r, g, b) => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return;
+    const o = (y * width + x) * channels;
+    out[o] = r; out[o + 1] = g; out[o + 2] = b;
+  };
+  const x0 = bbox.x - 2, y0 = bbox.y - 2, x1 = bbox.x + bbox.w + 1, y1 = bbox.y + bbox.h + 1;
+  for (let x = x0; x <= x1; x++) { put(x, y0, 255, 214, 0); put(x, y1, 255, 214, 0); }
+  for (let y = y0; y <= y1; y++) { put(x0, y, 255, 214, 0); put(x1, y, 255, 214, 0); }
+  for (let i = 0; i < mask.length; i++) if (mask[i]) put(i % width, Math.floor(i / width), 255, 0, 60);
+  return encodePng(width, height, channels, out);
+}
+
 /**
  * Compare two PNG buffers. A pixel counts as changed when any channel moves by
  * more than `threshold` (of 255); the default ignores anti-aliasing noise.
+ * With `highlight: true` a result that has changed pixels also carries `highlight`, a PNG buffer.
  * @returns {{sizeChanged:true,a:string,b:string}
- *          |{sizeChanged:false,changed:number,total:number,bbox:{x:number,y:number,w:number,h:number}|null}
+ *          |{sizeChanged:false,changed:number,total:number,bbox:{x:number,y:number,w:number,h:number}|null,highlight?:Buffer}
  *          |null} null when either image is not a PNG this module can decode.
  */
-export function diffPng(bufA, bufB, { threshold = 8 } = {}) {
+export function diffPng(bufA, bufB, { threshold = 8, highlight: wantHighlight = false } = {}) {
   const a = decodePng(bufA), b = decodePng(bufB);
   if (!a || !b) return null;
   if (a.width !== b.width || a.height !== b.height) {
@@ -71,6 +124,7 @@ export function diffPng(bufA, bufB, { threshold = 8 } = {}) {
   }
   const { width, height, channels } = a;
   let changed = 0, minX = width, minY = height, maxX = -1, maxY = -1;
+  const mask = wantHighlight ? new Uint8Array(width * height) : null;
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const o = (y * width + x) * channels;
@@ -78,12 +132,13 @@ export function diffPng(bufA, bufB, { threshold = 8 } = {}) {
       for (let c = 0; c < channels; c++) if (Math.abs(a.data[o + c] - b.data[o + c]) > threshold) { moved = true; break; }
       if (!moved) continue;
       changed++;
+      if (mask) mask[y * width + x] = 1;
       if (x < minX) minX = x; if (x > maxX) maxX = x;
       if (y < minY) minY = y; if (y > maxY) maxY = y;
     }
   }
-  return {
-    sizeChanged: false, changed, total: width * height,
-    bbox: changed ? { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 } : null,
-  };
+  const bbox = changed ? { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 } : null;
+  const result = { sizeChanged: false, changed, total: width * height, bbox };
+  if (mask && changed) result.highlight = highlight(b, mask, bbox);
+  return result;
 }
