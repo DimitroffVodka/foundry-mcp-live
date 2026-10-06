@@ -43,7 +43,7 @@ The server registers **zero resources and zero prompts**. Everything is exposed 
 
 ## How the tools are organized
 
-The server currently exposes ~31 tools (plus two design-harness tools, `render_fixture` and `preview_fixture`, that register only when a harness exists on the server host — see `server/TOOLS.md`). **Do not assume one tool per verb** — many related operations are merged behind a single tool that takes an `action` discriminator. Read the tool's own schema; the `action` enum lists the valid modes for that tool.
+The server currently exposes ~31 tools (plus three design-harness tools — `render_fixture`, `preview_fixture` and `write_variant` — that register only when a harness exists on the server host; see `server/TOOLS.md`). **Do not assume one tool per verb** — many related operations are merged behind a single tool that takes an `action` discriminator. Read the tool's own schema; the `action` enum lists the valid modes for that tool.
 
 - **Actors:** `actor_write` (create/update/delete actors and create-from-compendium).
 - **World content:** `scene` (create/update/activate/delete scenes) and `combat` (start/advance/end encounters) — each merged tool takes an `action` param, not separate `create_*`/`update_*`/`delete_*` verbs.

@@ -12,6 +12,7 @@ import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from "nod
 import { homedir } from "node:os";
 import path from "node:path";
 
+const GENERATED = /^[\w.-]+-\d+\.html$/;
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const uri = (png) => `data:image/png;base64,${png.toString("base64")}`;
 
@@ -87,7 +88,8 @@ export function writeGallery(html, name, { dir = galleryDir(), keep = 10 } = {})
   mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${name.replace(/[^\w.-]+/g, "_")}-${Date.now()}.html`);
   writeFileSync(file, html);
-  const old = readdirSync(dir).filter((f) => f.endsWith(".html"))
+  // Only files this function names (<name>-<ms>.html): FOUNDRY_MCP_GALLERY_DIR may point at a populated directory.
+  const old = readdirSync(dir).filter((f) => GENERATED.test(f))
     .map((f) => ({ f, t: statSync(path.join(dir, f)).mtimeMs })).sort((a, b) => b.t - a.t).slice(keep);
   for (const { f } of old) { try { unlinkSync(path.join(dir, f)); } catch { /* already gone */ } }
   return file;

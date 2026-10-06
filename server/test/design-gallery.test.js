@@ -41,6 +41,9 @@ test("buildGalleryHtml inlines images, escapes text, and shows base/head/diff pl
 test("writeGallery keeps only the newest files", async () => {
   const dir = fs.mkdtempSync(path.join(tmpdir(), "gal-"));
   try {
+    // Not ours: must survive the prune even though they are .html and older than everything.
+    for (const f of ["notes.html", "index.html", "report-final.html", "a-1.txt"]) fs.writeFileSync(path.join(dir, f), "keep me");
+    for (const f of ["notes.html", "index.html", "report-final.html", "a-1.txt"]) fs.utimesSync(path.join(dir, f), new Date(2000, 0, 1), new Date(2000, 0, 1));
     const made = [];
     for (let i = 0; i < 4; i++) {
       made.push(writeGallery("<p>x</p>", "a b/c", { dir, keep: 2 }));
@@ -48,8 +51,10 @@ test("writeGallery keeps only the newest files", async () => {
       await new Promise((r) => setTimeout(r, 5));
     }
     const left = fs.readdirSync(dir);
-    assert.equal(left.length, 2);
-    assert.ok(left.every((f) => /^a_b_c-\d+\.html$/.test(f)), "name sanitised");
+    const ours = left.filter((f) => /^a_b_c-\d+\.html$/.test(f));
+    assert.equal(ours.length, 2, "newest two of ours kept, name sanitised");
+    assert.deepEqual(left.filter((f) => !ours.includes(f)).sort(), ["a-1.txt", "index.html", "notes.html", "report-final.html"],
+      "files the tool did not write are never pruned");
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
