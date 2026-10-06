@@ -168,6 +168,24 @@ document.getElementById(id + "-css")?.remove();
 return { closed: !!app };`;
 }
 
+// Ask the module's design_preview handler to open/close the preview. A connected module that predates the
+// handler answers "Unknown tool"; the same steps can then be driven through `evaluate` — if the server's eval
+// gate allows it. The fallback exists for stale installs (the remote copy drifts); drop it once none remain.
+export async function callPreview(params, fallbackExpression, userId, { request = requestFoundry, allowEval = ALLOW_EVAL } = {}) {
+  try {
+    const reply = await request("design_preview", params, userId);
+    return reply?.result ?? reply;
+  } catch (err) {
+    if (!/Unknown tool/i.test(err.message)) throw err;
+    if (!allowEval) {
+      throw new Error("the connected Foundry module predates the design_preview handler and the server's eval gate "
+        + "(FOUNDRY_MCP_ALLOW_EVAL=0) is off — deploy the current module/ to Foundry and reload the client.");
+    }
+    const reply = await request("evaluate", { expression: fallbackExpression() }, userId);
+    return reply?.result ?? reply;
+  }
+}
+
 export async function fetchFixtureFragment({ fixture, module, state }, { timeoutMs = 15_000 } = {}) {
   const port = 41000 + Math.floor(Math.random() * 8000);
   const env = { ...process.env, PORT: String(port) };
@@ -704,9 +722,9 @@ export function registerServerLocalTools(mcp) {
       });
   }
 
-  // preview_fixture runs client JS through the bridge's evaluate action, so it
-  // honours the FOUNDRY_MCP_ALLOW_EVAL=0 opt-out the same way `evaluate` does.
-  if (designHarnessReady() && ALLOW_EVAL) {
+  // preview_fixture hands the window to the module's design_preview handler as data, so it needs
+  // neither the eval gate nor a direct bridge (the relay carries it).
+  if (designHarnessReady()) {
     registerRawTool(mcp, "preview_fixture",
       "Open a design-harness fixture as a REAL window inside a live Foundry client: the same compiled "
       + "markup and CSS the harness renders offline, but shown in the actual session so the real cascade, "
@@ -742,8 +760,7 @@ export function registerServerLocalTools(mcp) {
 
         if (close) {
           try {
-            const reply = await requestFoundry("evaluate", { expression: buildPreviewCloseExpression() }, targetUserId);
-            const result = reply?.result ?? reply;
+            const result = await callPreview({ close: true }, buildPreviewCloseExpression, targetUserId);
             return { content: [{ type: "text", text: result?.closed
               ? `Preview window closed on ${bridge.userName}.`
               : `No preview window was open on ${bridge.userName}.` }] };
@@ -762,10 +779,8 @@ export function registerServerLocalTools(mcp) {
         const widthPx = width ?? (Number.isFinite(Number(fragment.width)) ? Number(fragment.width) : 600);
         let openResult;
         try {
-          const reply = await requestFoundry("evaluate", { expression: buildPreviewOpenExpression({
-            html: fragment.html, css: fragment.css, title: fragment.title, classes: fragment.classes, width: widthPx,
-          }) }, targetUserId);
-          openResult = reply?.result ?? reply;
+          const open = { html: fragment.html, css: fragment.css, title: fragment.title, classes: fragment.classes, width: widthPx };
+          openResult = await callPreview(open, () => buildPreviewOpenExpression(open), targetUserId);
         } catch (err) {
           return diagnosisReply(`opening the preview failed: ${err.message}`, await getBridgeDiagnosis());
         }

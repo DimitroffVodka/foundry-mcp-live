@@ -459,7 +459,7 @@ Open a design-harness fixture as a **real window inside a live Foundry client** 
   - `close?` — close the preview window and return instead of opening.
   - `targetUser?` — which connected client shows the preview (GM by default).
 - **Returns**: a PNG screenshot of the open window plus a text line (target client, capture method, missing string keys if any). CDP only captures a debugger page logged in as the routed client's user; otherwise the reply says `html2canvas fallback` and why CDP was skipped. A screenshot failure still leaves the window open and says so. Nothing is persisted; no world documents change.
-- **Gating**: runs client JS through the bridge's `evaluate`, so it is absent when `FOUNDRY_MCP_ALLOW_EVAL=0` (and fails over a relayed client, where `evaluate` is refused).
+- **How it reaches the client**: the compiled markup and CSS go to the module's `design_preview` handler as **data** — no `evaluate`, so it works with `FOUNDRY_MCP_ALLOW_EVAL=0` and over a relayed client. The markup reaches `DialogV2` as a string, which Foundry runs through `cleanHTML` (no script, no event-handler attributes). It is a transient UI window: no world document is touched, so it is not behind the read-only toggle. **Needs the current `module/` deployed to Foundry** (the install is a copy: copy `module/` to `Data/modules/foundry-mcp-live` and reload the client); a module that predates the handler answers `Unknown tool`, and the server then falls back to driving the same steps through `evaluate` when the eval gate allows it, or says what to deploy.
 
 ---
 
