@@ -15,6 +15,7 @@ import {
   extractDocRef
 } from "../lib/audit.js";
 import { flushCanvasRender } from "./canvas-render.js";
+import { designPreview } from "./design-preview.js";
 import { createRuntimeJobStore } from "./runtime-jobs.js";
 import {
   applySceneLevelUpdate,
@@ -1655,6 +1656,14 @@ const handlers = {
 
     return { image: base64, mimeType: mime, width: w, height: h };
   },
+
+  /**
+   * Open (or close) the design-harness live preview window. Data in, window out:
+   * the server's preview_fixture sends a fixture's compiled markup and CSS here,
+   * so no `evaluate` is needed (works with the eval gate off and over the relay).
+   * UI-only, no world document is touched. See design-preview.js.
+   */
+  design_preview: designPreview,
 
   /**
    * Screenshot a DOM element (sheets, HUD, chat cards — anything the PIXI

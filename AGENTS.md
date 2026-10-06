@@ -43,7 +43,7 @@ The server registers **zero resources and zero prompts**. Everything is exposed 
 
 ## How the tools are organized
 
-The server currently exposes ~31 tools. **Do not assume one tool per verb** — many related operations are merged behind a single tool that takes an `action` discriminator. Read the tool's own schema; the `action` enum lists the valid modes for that tool.
+The server currently exposes ~31 tools (plus three design-harness tools — `render_fixture`, `preview_fixture` and `write_variant` — that register only when a harness exists on the server host; see `server/TOOLS.md`). **Do not assume one tool per verb** — many related operations are merged behind a single tool that takes an `action` discriminator. Read the tool's own schema; the `action` enum lists the valid modes for that tool.
 
 - **Actors:** `actor_write` (create/update/delete actors and create-from-compendium).
 - **World content:** `scene` (create/update/activate/delete scenes) and `combat` (start/advance/end encounters) — each merged tool takes an `action` param, not separate `create_*`/`update_*`/`delete_*` verbs.
@@ -111,6 +111,10 @@ The `request` tool pops a dialog on the **target user's** screen for its roll ac
 The reads `get_combat` and `chat` action 'read' are **not** gated — available regardless of `FOUNDRY_MCP_ALLOW_WRITE`.
 
 **Read-only, safe to explore with:** `list`, `document`, `scene_read`, `query_grid`, `search_compendium`, `get_settings`, `get_data_model`, `get_debug_snapshot`, `snapshot` (take/diff), `screenshot`, `get_console_errors`, `trace`, `bridge_status`, `list_connected_bridges`.
+
+## Editing this repo while the server runs
+
+`server/tools/*.js` hot-reloads for new MCP sessions; `server/lib/*`, `tools/_helpers.js` and `tools/index.js` do **not** — restart the server after changing them, especially after adding an export a tool imports. Details and the failure symptom: [`docs/updating-the-server.md`](docs/updating-the-server.md#editing-the-server-while-it-is-running-contributors).
 
 ## Quick smoke test
 

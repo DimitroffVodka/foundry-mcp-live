@@ -409,13 +409,57 @@ Capture a Foundry image. **Returns an image** (MCP image content block). The `ta
 
 **`target: "scene_grid"`** — like `canvas` but at **full resolution**, **WebP**, with a **coordinate grid overlay** — every cell gets a `"gx,gy"` label in white-on-black. Much bigger payload; vastly better for spatial reasoning. No extra capture params.
 
-**`target: "cdp"`** — a DOM element captured via Chrome DevTools Protocol (**pixel-perfect** — the browser's actual composited output; no html2canvas approximations). `selector` (CSS, required), `scale?` (default 2.0), `format?` (default png), `quality?`. Requires the bridge Chromium on port 9222.
+**`target: "cdp"`** — a DOM element captured via Chrome DevTools Protocol (**pixel-perfect** — the browser's actual composited output; no html2canvas approximations). `selector` (CSS, required), `scale?` (default 2.0), `format?` (default png), `quality?`. Requires a debuggable Chromium on port 9223 or 9222 that is logged in as the routed client (`targetUser`, GM by default); errors if none matches.
 
 ### `record_video`
 Record a video of the Foundry game viewport using CDP screencast + ffmpeg. Captures whatever is visible in the observer Chrome (port 9223, 60fps GPU); falls back to the bridge Chromium (9222). Requires a Chrome target that produces continuous frames — headless bridge tabs produce none.
 
 - **Params**: `duration` (required, 1–60, default 10), `fps?` (1–30, default 10), `quality?` (1–100, default 85), `maxWidth?` (default 1280), `maxHeight?` (default 720), `output?`.
 - **Returns**: `Video recorded: <path> — N frames, X.X MB` or `Recording failed: <reason>`.
+
+### `render_fixture` (server-local; present when a design harness is installed)
+Render a **design-harness fixture** to a PNG in a Foundry v14 window frame with **no world running** — core CSS, the game system's CSS and a module's stylesheets — and return the harness's layout check alongside the image. This is the offline design-review loop for any module checkout; `screenshot` is its live-world counterpart.
+
+Registers only when a design harness exists on the server host (default `~/git/shadowdark-enhancer/tools/design-harness`; override with `FOUNDRY_DESIGN_HARNESS`). Needs `chromium` (or `google-chrome`) on the host.
+
+- **Params**:
+  - `fixture?` — fixture file name (no `.mjs`) under `<module>/tools/design-harness/fixtures/`. **Omit it to discover**: the reply lists the module's fixtures and other sibling checkouts that have a harness.
+  - `fixtures?` — **several fixtures in one call** (2–8; use instead of `fixture`), e.g. a window's variants. Each is rendered per theme — and compared, with `against` — then every head render (and diff) comes back cropped to the window, with a one-line summary per variant (`clean | 5 px changed ...`). One **self-contained HTML gallery** is also written on the server host (`~/.cache/foundry-mcp/design-gallery/`, override `FOUNDRY_MCP_GALLERY_DIR`, newest 10 kept) with base / head / diff and the layout check for every variant and theme; the reply gives its path — open it from disk. All variants are validated before any render starts.
+  - `module?` — **absolute** path to a module checkout root to render; default: the harness's own module.
+  - `state?` — named fixture state (for fixtures with `build(state)`).
+  - `against?` — absolute path to a **base** checkout (a PR's base worktree, a release). Renders the fixture from both — `against` is the base, `module` (or the default module) the head — and ends each theme with a verdict: `pixels identical|differ; layout check unchanged|CHANGED` (a CHANGED check shows both). The pixel half decodes both PNGs and counts pixels that moved by more than 8/255 in any channel, so anti-aliasing noise (a checkout compared with itself differs by ±1 on a few corner pixels) reads as identical; real movement reports `N px changed (x%), in a WxH area at x,y`, and a different window size reports `size changed A -> B`. When pixels really moved, a third image per theme (`[theme] diff`) shows the head render dimmed with the changed pixels in red and a yellow box around them, so you can see where the change landed. A fixture the base lacks is reported as new in head; a bad base path errors.
+  - `theme?` — `"dark"` (default), `"light"`, or `"both"` (two renders, both images — light is where most design misses happen).
+  - `width?` — force the window width in px (e.g. `420`).
+- **Returns**: one **image** (PNG) per rendered theme, each preceded by a `[theme]` label (`[theme] base` / `[theme] head` with `against`), plus a text block with the module, theme/width and the per-theme layout check (`visible buttons`, `primary`, overflow/tiny-control problems, and any missing string keys). A failed render says so instead of a junk check (run `shot.mjs` on the host for the stack); a bad fixture or module errors with the available names.
+
+### `write_variant` (server-local; present when a design harness is installed)
+Author a **design variant** of an existing harness fixture, then look at it with `render_fixture {fixtures: [base, name]}`. A variant swaps handlebars templates and/or appends CSS; you supply **data, never code** — the fixture's JavaScript is generated by the tool from a fixed template (every value goes through `JSON.stringify`), so no caller-written code reaches the node process that renders it.
+
+Writes are real files in the module checkout, **under `<module>/tools/design-harness/` only**: `fixtures/<name>.mjs` (carries a `// generated by foundry-mcp-live write_variant` first line) and `variants/<name>/*.hbs`. It never overwrites a fixture that lacks that line (a hand-written one), refuses symlinks, and `discard` only deletes what it generated. The files show up in `git status` — discard the variants you do not keep.
+
+- **Params**:
+  - `action?` — `"write"` (default) or `"discard"`.
+  - `name` — the variant's fixture name (letters, digits, `-`, `_`); new, or a variant this tool generated.
+  - `base` — existing fixture to derive from (required for write).
+  - `module?` — absolute path to the module checkout; default: the harness's own module.
+  - `templates?` — `{ "<template path the base uses>": "<handlebars source>" }`, up to 20, 200 KB each. Keys are the paths the base fixture names (e.g. `templates/crawl-tracker-list.hbs`); use the real template's context shape and `data-action` names.
+  - `css?` — CSS appended after the base fixture's styles (200 KB max).
+  - `title?`, `width?`, `classes?` — scalar overrides of the window.
+- **Returns**: the files written (relative to the module), a warning naming any template key the base fixture does not mention together with the templates it does (a JS-built window mentions none and can only change `css`), and the next call to make.
+- **Typical loop**: `write_variant` ×N → `render_fixture {fixtures: ["base", "v1", "v2"], theme: "both", against?: …}` → keep one, `write_variant {action: "discard"}` the rest.
+
+### `preview_fixture` (server-local; present when a design harness is installed)
+Open a design-harness fixture as a **real window inside a live Foundry client** — the offline harness replica can disagree with the live cascade (it cannot model the client's unlayered stylesheet re-injection), so this is the look at the truth before a window ships. Renders the fixture's parts plus its own css (proposal fixtures bring the kit), opens (or replaces) one preview window (id `mcp-fixture-preview`), screenshots it back (**CDP real pixels** when a Chrome debugger port answers; an html2canvas fallback — flagged in the reply, and its text baselines are approximate — otherwise), and **leaves it open for inspection**.
+
+- **Params**:
+  - `fixture` (required unless `close:true`; omit to list the available ones) — fixture file name (no `.mjs`).
+  - `module?` — absolute path to a module checkout root; default: the harness's own module.
+  - `state?` — named fixture state.
+  - `width?` — override the window width in px; default: the fixture's own width (else 600).
+  - `close?` — close the preview window and return instead of opening.
+  - `targetUser?` — which connected client shows the preview (GM by default).
+- **Returns**: a PNG screenshot of the open window plus a text line (target client, capture method, missing string keys if any). CDP only captures a debugger page logged in as the routed client's user; otherwise the reply says `html2canvas fallback` and why CDP was skipped. A screenshot failure still leaves the window open and says so. Nothing is persisted; no world documents change.
+- **How it reaches the client**: the compiled markup and CSS go to the module's `design_preview` handler as **data** — no `evaluate`, so it works with `FOUNDRY_MCP_ALLOW_EVAL=0` and over a relayed client. The markup reaches `DialogV2` as a string, which Foundry runs through `cleanHTML` (no script, no event-handler attributes). It is a transient UI window: no world document is touched, so it is not behind the read-only toggle. **Needs the current `module/` deployed to Foundry** (the install is a copy: copy `module/` to `Data/modules/foundry-mcp-live` and reload the client); a module that predates the handler answers `Unknown tool`, and the server then falls back to driving the same steps through `evaluate` when the eval gate allows it, or says what to deploy.
 
 ---
 
