@@ -19,7 +19,8 @@ import { diagnoseBridgeStatus }             from "../lib/bridge-status.js";
 import { relaunchClient }                   from "../lib/relaunch.js";
 import { requestFoundry }                   from "../lib/foundry-rpc.js";
 import { cdpScreenshot }                    from "../lib/cdp-screenshot.js";
-import { diffPng }                          from "../lib/png-diff.js";
+import { cropToContent, diffPng }           from "../lib/png-diff.js";
+import { buildGalleryHtml, checkSummary, writeGallery } from "../lib/design-gallery.js";
 import { relayClients }                     from "../lib/relay-runtime.js";
 import { registerRawTool, TARGET_USER_DESC } from "./_helpers.js";
 
@@ -251,24 +252,26 @@ export function compareRuns(base, head) {
 }
 export const compareVerdict = (base, head) => compareRuns(base, head).text;
 
+// `against` is the BASE side of a compare. A fixture the base lacks is a NEW
+// fixture, not an error — anything else wrong with `against` is.
+function resolveBase(fixture, against) {
+  if (!against) return { hasFixture: false };
+  const base = validateDesignTarget({ fixture, module: against });
+  if (!base.error) return { hasFixture: true };
+  const t = designRenderTarget({ fixture, module: against });
+  const onlyFixtureMissing = path.isAbsolute(against)
+    && existsSync(path.join(t.moduleDir, "module.json")) && existsSync(t.fixturesDir) && !existsSync(t.fixtureFile);
+  return onlyFixtureMissing ? { hasFixture: false } : { error: `against: ${base.error}` };
+}
+
 export async function renderFixtureReport({ fixture, module, against, state, theme, width }) {
   const text = (t) => ({ content: [{ type: "text", text: t }] });
   const head = validateDesignTarget({ fixture, module });
   if (head.error) return text(head.error);
 
-  // `against` is the BASE side. A fixture the base lacks is a NEW fixture, not
-  // an error — anything else wrong with `against` is.
-  let baseHasFixture = false;
-  if (against) {
-    const base = validateDesignTarget({ fixture, module: against });
-    baseHasFixture = !base.error;
-    if (base.error) {
-      const t = designRenderTarget({ fixture, module: against });
-      const onlyFixtureMissing = path.isAbsolute(against)
-        && existsSync(path.join(t.moduleDir, "module.json")) && existsSync(t.fixturesDir) && !existsSync(t.fixtureFile);
-      if (!onlyFixtureMissing) return text(`against: ${base.error}`);
-    }
-  }
+  const base = resolveBase(fixture, against);
+  if (base.error) return text(base.error);
+  const baseHasFixture = base.hasFixture;
 
   const themes = theme === "both" ? ["dark", "light"] : [theme ?? "dark"];
   const parts = [];
@@ -302,6 +305,69 @@ export async function renderFixtureReport({ fixture, module, against, state, the
     : `Rendered \`${fixture}\` from ${head.moduleDir}`;
   return { content: [...parts, { type: "text", text:
     `${summary} (${themes.join("+")})${width ? ` at ${width}px` : ""} — ${images} image(s).\n${notes.join("\n")}` }] };
+}
+
+const MAX_VARIANTS = 8;
+
+// Several fixtures in one call: every variant rendered (and compared, with
+// `against`), the head renders and diffs returned to the model, and the whole
+// set — base, head, diff, checks — written as one self-contained HTML page.
+export async function renderGalleryReport({ fixtures, module, against, state, theme, width }) {
+  const text = (t) => ({ content: [{ type: "text", text: t }] });
+  const names = [...new Set(fixtures)];
+  if (names.length > MAX_VARIANTS) return text(`Error: at most ${MAX_VARIANTS} variants per call (got ${names.length}).`);
+
+  // Validate every variant up front so a typo in the fifth does not cost four renders.
+  let moduleDir;
+  const bases = new Map();
+  for (const fixture of names) {
+    const head = validateDesignTarget({ fixture, module });
+    if (head.error) return text(`${fixture}: ${head.error}`);
+    moduleDir = head.moduleDir;
+    const base = resolveBase(fixture, against);
+    if (base.error) return text(`${fixture}: ${base.error}`);
+    bases.set(fixture, base.hasFixture);
+  }
+
+  const themes = theme === "both" ? ["dark", "light"] : [theme ?? "dark"];
+  const entries = [];
+  const content = [];
+  const lines = [];
+  for (const fixture of names) {
+    const entry = { fixture, newInHead: !!against && !bases.get(fixture), themes: [] };
+    for (const t of themes) {
+      const head = await renderFixtureOnce({ fixture, module, theme: t, width, state });
+      const row = { theme: t, head };
+      if (against && bases.get(fixture)) {
+        row.base = await renderFixtureOnce({ fixture, module: against, theme: t, width, state });
+        row.verdict = compareRuns(row.base, head);
+      }
+      // The verdict above used the full renders; crop only what is shown. The harness page is
+      // 1080px wide and the window a fraction of it, so uncropped galleries are mostly empty.
+      const [cHead, cBase, cDiff] = cropToContent([head.png, row.base?.png ?? null, row.verdict?.highlight ?? null], { measure: [0, 1] });
+      row.head = { ...head, png: cHead };
+      if (row.base) row.base = { ...row.base, png: cBase };
+      if (row.verdict?.highlight) row.verdict = { ...row.verdict, highlight: cDiff };
+      entry.themes.push(row);
+      if (row.head.png) content.push({ type: "text", text: `[${fixture} ${t}]` }, { type: "image", data: row.head.png.toString("base64"), mimeType: "image/png" });
+      if (row.verdict?.highlight) {
+        content.push({ type: "text", text: `[${fixture} ${t}] diff — changed pixels red, box yellow` },
+          { type: "image", data: row.verdict.highlight.toString("base64"), mimeType: "image/png" });
+      }
+      const vs = row.verdict ? ` | ${row.verdict.text.split("; ")[0]}` : entry.newInHead ? " | new in head" : "";
+      lines.push(`${fixture} [${t}]: ${checkSummary(head)}${vs}`);
+    }
+    entries.push(entry);
+  }
+
+  const title = `${path.basename(moduleDir)}: ${names.join(", ")}`;
+  const file = writeGallery(buildGalleryHtml({ title, moduleDir, againstDir: against && path.resolve(against), width, entries }),
+    `${path.basename(moduleDir)}-${names.length}-variants`);
+  content.push({ type: "text", text:
+    `Rendered ${names.length} variant(s) from ${moduleDir}${against ? `, compared against ${path.resolve(against)}` : ""} (${themes.join("+")})`
+    + `${width ? ` at ${width}px` : ""}.\n${lines.join("\n")}\n`
+    + `Gallery (base, head, diff and checks for every variant, self-contained): ${file}` });
+  return { content };
 }
 
 export function registerServerLocalTools(mcp) {
@@ -559,7 +625,7 @@ export function registerServerLocalTools(mcp) {
       + "running (core CSS + the game system's CSS + a module's stylesheets, offline) and return "
       + "the image plus the harness's layout check (visible/primary button counts, overflow, tiny "
       + "controls, missing string keys). The offline design-review loop for any module checkout — `screenshot` is its "
-      + "live-world counterpart; theme 'both' renders dark and light in one call; `against` compares a base checkout with the head and reports whether pixels and the layout check changed (PR review). Present only when a design harness is installed on this host "
+      + "live-world counterpart; theme 'both' renders dark and light in one call; `against` compares a base checkout with the head and reports whether pixels and the layout check changed (PR review). `fixtures` renders several variants at once and writes one HTML gallery of them. Present only when a design harness is installed on this host "
       + "(FOUNDRY_DESIGN_HARNESS overrides the default path); needs chromium on the host.",
       {
         fixture: z.string().regex(/^[\w-]+$/).optional().describe(
@@ -569,6 +635,11 @@ export function registerServerLocalTools(mcp) {
         module: z.string().optional().describe(
           "Absolute path to the module checkout to render (any Foundry module). "
           + "Default: the harness's own module."
+        ),
+        fixtures: z.array(z.string().regex(/^[\w-]+$/)).min(1).max(8).optional().describe(
+          "Several fixtures in one call (use instead of `fixture`) — e.g. a window's variants. Returns each head render "
+          + "(and diff, with `against`) plus a one-line summary per variant, and writes ONE self-contained HTML gallery "
+          + "of base/head/diff/checks for all of them; the reply gives its path."
         ),
         state: z.string().regex(/^[\w.-]+$/).optional().describe(
           "Named fixture state, when the fixture defines them (see its build(state))."
@@ -583,7 +654,10 @@ export function registerServerLocalTools(mcp) {
           "Force the window width in px (e.g. 420 to check the narrow case)."
         ),
       },
-      renderFixtureReport);
+      async (p) => {
+        if (p.fixtures && p.fixture) return { content: [{ type: "text", text: "Error: pass `fixture` or `fixtures`, not both." }] };
+        return p.fixtures ? renderGalleryReport(p) : renderFixtureReport(p);
+      });
 
   }
 

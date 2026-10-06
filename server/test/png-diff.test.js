@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as zlib from "node:zlib";
 import { deflateSync } from "node:zlib";
 
-import { decodePng, diffPng, encodePng as libEncodePng } from "../lib/png-diff.js";
+import { cropToContent, decodePng, diffPng, encodePng as libEncodePng } from "../lib/png-diff.js";
 import { compareVerdict, compareRuns } from "../tools/server-local.js";
 
 // Encoder for tests only. The decoder never checks CRCs, so they are zeroed.
@@ -119,4 +119,36 @@ test("compareRuns carries the highlight only when pixels really moved", () => {
   assert.ok(Buffer.isBuffer(compareRuns(side(flat), side(block)).highlight));
   assert.equal(compareRuns(side(flat), side(noisy)).highlight, undefined);
   assert.equal(compareRuns(side(flat), side(flat)).highlight, undefined);
+});
+
+test("cropToContent crops to the window plus a margin and ignores the check-overlay corner", () => {
+  const bg = [30, 30, 30], win = [13, 12, 20], overlay = [0, 0, 0];
+  const page = (px) => encodePng(500, 300, 3, px);
+  const base = (x, y) => (x >= 50 && x < 80 && y >= 40 && y < 70 ? win : x >= 400 && y >= 250 ? overlay : bg);
+  const shifted = (x, y) => (x >= 60 && x < 100 && y >= 40 && y < 70 ? win : x >= 400 && y >= 250 ? overlay : bg);
+  const [a, b] = cropToContent([page(base), page(shifted)]);
+  const da = decodePng(a), db = decodePng(b);
+  // union of both windows (x 50..99, y 40..69) + 12px margin; overlay at x>=400,y>=250 ignored
+  assert.deepEqual([da.width, da.height], [74, 54]);
+  assert.deepEqual([db.width, db.height], [74, 54]);
+  assert.deepEqual([...da.data.subarray(0, 3)], bg);
+  assert.deepEqual([...da.data.subarray(((12 * 74) + 12) * 3, ((12 * 74) + 12) * 3 + 3)], win); // window's top-left sits at the margin
+});
+
+test("cropToContent measures only the indices asked for, so a dimmed diff image does not widen the crop", () => {
+  const win = (x, y) => (x >= 50 && x < 80 && y >= 40 && y < 70 ? [200, 20, 20] : [30, 30, 30]);
+  const dimmed = (x, y) => (x >= 50 && x < 80 && y >= 40 && y < 70 ? [70, 7, 7] : [10, 10, 10]); // background no longer gray
+  const [head, diff] = cropToContent([encodePng(500, 300, 3, win), encodePng(500, 300, 3, dimmed)], { measure: [0] });
+  assert.deepEqual([decodePng(head).width, decodePng(head).height], [54, 54]);
+  assert.deepEqual([decodePng(diff).width, decodePng(diff).height], [54, 54]);
+  const [, wide] = cropToContent([encodePng(500, 300, 3, win), encodePng(500, 300, 3, dimmed)]);
+  assert.equal(decodePng(wide).width, 500 - 0, "unmeasured default would have kept the whole page");
+});
+
+test("cropToContent passes through what it cannot crop", () => {
+  const flat = encodePng(40, 40, 3, () => [30, 30, 30]);
+  assert.deepEqual(cropToContent([flat, null]), [flat, null], "all background: nothing to crop to");
+  assert.deepEqual(cropToContent([Buffer.from("nope")]), [Buffer.from("nope")]);
+  const other = encodePng(40, 30, 3, () => [200, 0, 0]);
+  assert.deepEqual(cropToContent([encodePng(40, 40, 3, () => [200, 0, 0]), other]).length, 2, "mixed sizes pass through");
 });

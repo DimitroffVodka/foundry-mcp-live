@@ -142,3 +142,44 @@ export function diffPng(bufA, bufB, { threshold = 8, highlight: wantHighlight = 
   if (mask && changed) result.highlight = highlight(b, mask, bbox);
   return result;
 }
+
+// The harness page's background is a neutral gray texture (r=g=b, luminance
+// ~26-38, measured); a window never is. The check overlay sits bottom-right.
+const isBackground = (r, g, b) => Math.max(r, g, b) - Math.min(r, g, b) <= 1 && r >= 22 && r <= 42;
+
+/**
+ * Crop same-sized harness renders to the window: the union of every image's
+ * non-background area (the check overlay corner ignored) plus a margin.
+ * Returns the originals when an image cannot be decoded or has no content.
+ * @param {Buffer[]} pngs  renders of one fixture, same dimensions (null entries pass through)
+ * @param {number[]} [opts.measure]  which indices define the crop (default all); the rest are cropped
+ *   to the same rectangle — a dimmed diff image must not be measured, its background is no longer gray
+ */
+export function cropToContent(pngs, { margin = 12, overlayW = 376, overlayH = 160, measure } = {}) {
+  const decoded = pngs.map((b) => (b ? decodePng(b) : null));
+  const real = decoded.filter(Boolean);
+  if (!real.length || real.some((d) => d.width !== real[0].width || d.height !== real[0].height)) return pngs;
+  const { width, height, channels } = real[0];
+  let x0 = width, y0 = height, x1 = -1, y1 = -1;
+  for (const d of decoded.filter((d, i) => d && (!measure || measure.includes(i)))) {
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (x >= width - overlayW && y >= height - overlayH) continue;
+        const o = (y * width + x) * channels;
+        if (isBackground(d.data[o], d.data[o + 1], d.data[o + 2])) continue;
+        if (x < x0) x0 = x; if (x > x1) x1 = x;
+        if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+    }
+  }
+  if (x1 < 0) return pngs;
+  x0 = Math.max(0, x0 - margin); y0 = Math.max(0, y0 - margin);
+  x1 = Math.min(width - 1, x1 + margin); y1 = Math.min(height - 1, y1 + margin);
+  const w = x1 - x0 + 1, h = y1 - y0 + 1;
+  return decoded.map((d, i) => {
+    if (!d) return pngs[i];
+    const out = Buffer.alloc(w * h * channels);
+    for (let y = 0; y < h; y++) d.data.copy(out, y * w * channels, ((y0 + y) * width + x0) * channels, ((y0 + y) * width + x0 + w) * channels);
+    return encodePng(w, h, channels, out);
+  });
+}
