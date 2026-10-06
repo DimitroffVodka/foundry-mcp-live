@@ -74,3 +74,23 @@ Then restart the server: **close the `start.bat` window** (this stops the server
 - Server version is read from `server/package.json` ([config.js](../server/lib/config.js) → `SERVER_VERSION`) and sent to the module in a `hello-ack` frame.
 - The module compares it against its own version and a `PROTOCOL_VERSION` (bumped only on breaking handshake/tool changes — not every release).
 - Keep `module.json` and `server/package.json` versions in lockstep when you cut a release, and note in the changelog whenever a release **requires a server update** (server-only fixes won't trigger a module update notification on their own).
+
+---
+
+## Editing the server while it is running (contributors)
+
+`server/tools/*.js` **hot-reloads**: a saved edit reaches every *new* MCP session with no restart (an existing session keeps its old tool list until it reconnects). Nothing else does. These are loaded once per process and need `systemctl --user restart foundry-mcp-live` after an edit:
+
+- `server/lib/*` — including a brand-new export added to an existing file
+- `server/tools/_helpers.js` and `server/tools/index.js`
+- `server/server.js`
+
+**The trap:** adding an export to a `lib/` file and importing it from a tool. The tool file reloads, but the running process still holds the old `lib/` file, so the import fails with `does not provide an export named …` and that tools module fails to load. A syntax check or a fresh `node` import will *not* show this, because they load the new `lib/`. Each tools module loads in isolation, so only its tools go missing (the server used to answer every request with HTTP 500).
+
+Check for it after editing:
+
+```bash
+journalctl --user -u foundry-mcp-live -n 50 | grep "failed to load"
+```
+
+A line like `tools/server-local.js failed to load … (lib/ is not hot-reloaded: restart the server)` means restart. A restart drops open MCP sessions; clients reconnect, and Foundry bridge clients reconnect on their own.

@@ -112,6 +112,10 @@ The reads `get_combat` and `chat` action 'read' are **not** gated — available 
 
 **Read-only, safe to explore with:** `list`, `document`, `scene_read`, `query_grid`, `search_compendium`, `get_settings`, `get_data_model`, `get_debug_snapshot`, `snapshot` (take/diff), `screenshot`, `get_console_errors`, `trace`, `bridge_status`, `list_connected_bridges`.
 
+## Editing this repo while the server runs
+
+`server/tools/*.js` hot-reloads for new MCP sessions; `server/lib/*`, `tools/_helpers.js` and `tools/index.js` do **not** — restart the server after changing them, especially after adding an export a tool imports. Details and the failure symptom: [`docs/updating-the-server.md`](docs/updating-the-server.md#editing-the-server-while-it-is-running-contributors).
+
 ## Quick smoke test
 
 After configuration, in order. If multiple bridges are connected, pick one `targetUser` from step 1 and reuse it on steps 2–4.
