@@ -62,7 +62,7 @@ test("collision: per type, wall ids only, first contact point", () => {
   const r = spatialQuery({ mode: "collision", from: "Alpha", to: { x: 550, y: 150 } });
   assert.deepEqual(r.move, { blocked: true, walls: ["W1"], at: { x: 300, y: 150 } });
   assert.deepEqual(r.sound, { blocked: false, walls: [] });
-  assert.deepEqual(Object.keys(spatialQuery({ mode: "collision", from: "Alpha", to: "Beyond", types: ["sight"] })), ["mode", "from", "to", "sight"]);
+  assert.deepEqual(Object.keys(spatialQuery({ mode: "collision", from: "Alpha", to: "Beyond", types: ["sight"] })), ["mode", "from", "to", "level", "sight"]);
   assert.throws(() => spatialQuery({ mode: "collision", from: "Ghost", to: "Alpha" }), /from: token not found: Ghost/);
 });
 
@@ -95,4 +95,27 @@ test("measure: names the diagonal rule; needs no drawn canvas", () => {
   assert.throws(() => spatialQuery({ mode: "measure", sceneId: "s1", waypoints: [{ x: 0, y: 0 }] }), /at least two/);
   assert.throws(() => spatialQuery({ mode: "path", from: { x: 0, y: 0 }, to: { x: 1, y: 1 } }), /View the scene first/);
   assert.throws(() => spatialQuery({ mode: "fly" }), /Unknown query_grid mode "fly"/);
+});
+
+test("path/collision/range test the walls of the from token's Level, an explicit level, or the canvas Level", () => {
+  const scene = fakeCanvas();
+  const levels = [{ id: "L1", name: "Cellar" }, { id: "L2", name: "Ground" }];
+  scene.name = "Test";
+  scene.levels = Object.assign(levels, { get: (id) => levels.find((l) => l.id === id), getName: (n) => levels.find((l) => l.name === n) });
+  scene.initialLevel = levels[0];
+  scene.tokens.get("a")._source = { level: "L2" };
+  scene.tokens.get("n")._source = { level: "gone" };
+  globalThis.canvas.level = levels[0];
+  const seen = [];
+  for (const b of Object.values(CONFIG.Canvas.polygonBackends)) {
+    const inner = b.testCollision;
+    b.testCollision = (x, y, opts) => { seen.push(opts.level?.id); return inner(x, y, opts); };
+  }
+  const run = (q) => { seen.length = 0; const r = spatialQuery(q); return [r.level, [...new Set(seen)]]; };
+  assert.deepEqual(run({ mode: "collision", from: "Alpha", to: { x: 550, y: 150 } }), ["L2", ["L2"]]);
+  assert.deepEqual(run({ mode: "collision", from: { x: 150, y: 150 }, to: { x: 550, y: 150 } }), ["L1", ["L1"]]);
+  assert.deepEqual(run({ mode: "range", from: "Alpha", distance: 30, lineOfSight: true }), ["L2", ["L2"]]);
+  assert.deepEqual(run({ mode: "path", from: "Alpha", to: { x: 550, y: 150 }, level: "Cellar" }), ["L1", ["L1"]]);
+  assert.deepEqual(run({ mode: "collision", from: "Near", to: "Alpha" }), ["L1", ["L1"]], "a token on a missing Level falls back to the initial Level");
+  assert.throws(() => spatialQuery({ mode: "collision", from: "Alpha", to: "Near", level: "Attic" }), /level "Attic" is not a Level of scene "Test"/);
 });

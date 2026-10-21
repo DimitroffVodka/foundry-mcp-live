@@ -15,14 +15,14 @@ const SENSES = ["move", "sight", "light", "sound"];
 
 // Test whether a multi-cell token can move between two pixel corners without
 // any occupied subcell colliding. Origin/target are top-left pixel coords.
-export function cellsBlocked(fx, fy, tx, ty, tokenW, tokenH, gridSize, collision) {
+export function cellsBlocked(fx, fy, tx, ty, tokenW, tokenH, gridSize, collision, level) {
   for (let i = 0; i < tokenW; i++) {
     for (let j = 0; j < tokenH; j++) {
       const ox = fx + i * gridSize + gridSize / 2;
       const oy = fy + j * gridSize + gridSize / 2;
       const dx = tx + i * gridSize + gridSize / 2;
       const dy = ty + j * gridSize + gridSize / 2;
-      if (collision.testCollision({ x: ox, y: oy }, { x: dx, y: dy }, { type: "move", mode: "any" })) return true;
+      if (collision.testCollision({ x: ox, y: oy }, { x: dx, y: dy }, { type: "move", mode: "any", level })) return true;
     }
   }
   return false;
@@ -32,7 +32,7 @@ export function cellsBlocked(fx, fy, tx, ty, tokenW, tokenH, gridSize, collision
 // { path: [{x,y} top-left px], cost }, null when no route exists, or
 // { path: [], cost: 0, capped: true } when maxNodes ran out first.
 // ponytail: square-grid stepping only; hex scenes get square-cell paths. Use the grid's own adjacency if hex paths are needed.
-export function findGridPath({ startX, startY, endX, endY, gridSize, collision, tokenWidth = 1, tokenHeight = 1, maxNodes = DEFAULT_MAX_NODES }) {
+export function findGridPath({ startX, startY, endX, endY, gridSize, collision, tokenWidth = 1, tokenHeight = 1, maxNodes = DEFAULT_MAX_NODES, level }) {
   const DIRS = [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[-1,1],[1,-1],[1,1]];
   const cheb = (ax, ay, bx, by) => Math.max(Math.abs(ax - bx), Math.abs(ay - by));
   const key  = (gx, gy) => `${gx},${gy}`;
@@ -77,7 +77,7 @@ export function findGridPath({ startX, startY, endX, endY, gridSize, collision, 
       const ny = cur.gy + dy;
       const nk = key(nx, ny);
       if (closed.has(nk)) continue;
-      if (cellsBlocked(cur.gx * gridSize, cur.gy * gridSize, nx * gridSize, ny * gridSize, tokenWidth, tokenHeight, gridSize, collision)) continue;
+      if (cellsBlocked(cur.gx * gridSize, cur.gy * gridSize, nx * gridSize, ny * gridSize, tokenWidth, tokenHeight, gridSize, collision, level)) continue;
       const tg = cur.g + 1;
       const existing = gScore.get(nk);
       if (existing !== undefined && tg >= existing) continue;
@@ -117,16 +117,27 @@ function wallScene() {
   return scene;
 }
 
+// v14 tests walls per Level (polygon config.level, which core defaults to canvas.level); v13 has no Levels.
+function wallLevel(scene, ref, token) {
+  if (ref !== undefined) {
+    const level = scene.levels?.get(ref) ?? scene.levels?.getName?.(ref);
+    if (!level) throw new Error(`level "${ref}" is not a Level of scene "${scene.name}"`);
+    return level;
+  }
+  if (token && scene.levels) return scene.levels.get(token._source.level) ?? scene.initialLevel;
+  return canvas.level;
+}
+
 function measure(scene, points) {
   const r = scene.grid.measurePath(points);
   return { distance: r.distance, cost: r.cost, spaces: r.spaces, diagonals: r.diagonals, euclidean: r.euclidean };
 }
 
 // The walls (and first contact point) between two points, per restriction type.
-function collisionsBetween(a, b, types) {
+function collisionsBetween(a, b, types, level) {
   const out = {};
   for (const type of types) {
-    const hits = CONFIG.Canvas.polygonBackends[type].testCollision(a, b, { type, mode: "all" });
+    const hits = CONFIG.Canvas.polygonBackends[type].testCollision(a, b, { type, mode: "all", level });
     const walls = new Set();
     for (const v of hits) for (const e of v.edges ?? []) if (e.type === "wall") walls.add(e.object?.id ?? e.id.replace(/^wall\./, ""));
     out[type] = { blocked: hits.length > 0, walls: [...walls] };
@@ -141,6 +152,8 @@ const MODES = {
     const size = scene.grid.size;
     const from = resolvePoint(scene, p.from, "from");
     const to = resolvePoint(scene, p.to, "to");
+    const level = wallLevel(scene, p.level, from.token);
+    const lv = level?.id ?? null;
     const maxNodes = p.maxNodes ?? DEFAULT_MAX_NODES;
     if (!Number.isInteger(maxNodes) || maxNodes < 1 || maxNodes > MAX_NODES_LIMIT) {
       throw new Error(`maxNodes must be an integer 1-${MAX_NODES_LIMIT}`);
@@ -150,44 +163,47 @@ const MODES = {
     const result = findGridPath({
       startX: start.x, startY: start.y, endX: to.point.x, endY: to.point.y, gridSize: size,
       collision: CONFIG.Canvas.polygonBackends.move,
-      tokenWidth: start.width, tokenHeight: start.height, maxNodes,
+      tokenWidth: start.width, tokenHeight: start.height, maxNodes, level,
     });
-    if (!result) return { mode: "path", reachable: false, reason: "No route: walls (or closed doors) cut the destination off." };
+    if (!result) return { mode: "path", level: lv, reachable: false, reason: "No route: walls (or closed doors) cut the destination off." };
     if (result.capped) {
-      return { mode: "path", reachable: false, reason: `Gave up after ${maxNodes} cells (maxNodes). Raise maxNodes or ask for a shorter leg.` };
+      return { mode: "path", level: lv, reachable: false, reason: `Gave up after ${maxNodes} cells (maxNodes). Raise maxNodes or ask for a shorter leg.` };
     }
     const half = size / 2;
     const waypoints = result.path.map(c => ({ x: c.x, y: c.y, gx: c.x / size, gy: c.y / size }));
     const centers = [{ x: Math.floor(start.x / size) * size + half, y: Math.floor(start.y / size) * size + half },
       ...waypoints.map(w => ({ x: w.x + half, y: w.y + half }))];
-    return { mode: "path", reachable: true, steps: result.cost, waypoints, ...measure(scene, centers), units: scene.grid.units };
+    return { mode: "path", level: lv, reachable: true, steps: result.cost, waypoints, ...measure(scene, centers), units: scene.grid.units };
   },
 
   collision(p) {
     const scene = wallScene();
-    const a = resolvePoint(scene, p.from, "from").point;
+    const from = resolvePoint(scene, p.from, "from");
+    const a = from.point;
+    const level = wallLevel(scene, p.level, from.token);
     const b = resolvePoint(scene, p.to, "to").point;
     const types = p.types?.length ? p.types : SENSES;
     const bad = types.filter(t => !SENSES.includes(t));
     if (bad.length) throw new Error(`Unknown collision type(s) ${bad.join(", ")}; use ${SENSES.join("|")}`);
-    return { mode: "collision", from: a, to: b, ...collisionsBetween(a, b, types) };
+    return { mode: "collision", from: a, to: b, level: level?.id ?? null, ...collisionsBetween(a, b, types, level) };
   },
 
   range(p) {
     const scene = wallScene();
     if (!Number.isFinite(p.distance) || p.distance < 0) throw new Error("range needs distance (scene units, e.g. feet)");
     const from = resolvePoint(scene, p.from, "from");
+    const level = wallLevel(scene, p.level, from.token);
     const tokens = [];
     for (const t of scene.tokens) {
       if (t === from.token) continue;
       const c = t.getCenterPoint();
       const { distance } = measure(scene, [from.point, c]);
       if (distance > p.distance) continue;
-      if (p.lineOfSight && CONFIG.Canvas.polygonBackends.sight.testCollision(from.point, c, { type: "sight", mode: "any" })) continue;
+      if (p.lineOfSight && CONFIG.Canvas.polygonBackends.sight.testCollision(from.point, c, { type: "sight", mode: "any", level })) continue;
       tokens.push({ id: t.id, name: t.name, actorId: t.actorId, x: c.x, y: c.y, distance });
     }
     tokens.sort((x, y) => x.distance - y.distance);
-    return { mode: "range", from: from.point, distance: p.distance, units: scene.grid.units, lineOfSight: !!p.lineOfSight, count: tokens.length, tokens };
+    return { mode: "range", from: from.point, level: level?.id ?? null, distance: p.distance, units: scene.grid.units, lineOfSight: !!p.lineOfSight, count: tokens.length, tokens };
   },
 
   measure(p) {

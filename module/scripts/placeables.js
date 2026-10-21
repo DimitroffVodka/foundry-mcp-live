@@ -76,6 +76,7 @@ function refuse(problems, total) {
 function differences(sentEntries, docs) {
   const out = [];
   docs.forEach((doc, i) => {
+    if (!doc) return;
     const sent = foundry.utils.expandObject(sentEntries[i]);
     delete sent._id;
     for (const d of storedDifferently(sent, doc.toObject())) out.push({ index: i, id: doc.id, ...d });
@@ -126,8 +127,12 @@ async function create(scene, type, entries, { level, callId }) {
   await scene.createEmbeddedDocuments(type, flagged, { keepId: true });
   const collection = scene.getEmbeddedCollection(type);
   const docs = ids.map(id => collection.get(id));
+  // Another module's preCreate hook can veto a document; report it rather than throw after the rest were written.
+  const notCreated = docs.flatMap((d, i) => (d ? [] : [i]));
+  const made = docs.filter(Boolean);
   const diffs = differences(sent, docs);
-  return { sceneId: scene.id, type, callId, created: docs.length, ids: docs.map(d => d.id), ...(diffs.length && { storedDifferently: diffs }) };
+  return { sceneId: scene.id, type, callId, created: made.length, ids: made.map(d => d.id),
+    ...(notCreated.length && { notCreated }), ...(diffs.length && { storedDifferently: diffs }) };
 }
 
 async function update(scene, type, entries) {
@@ -155,6 +160,7 @@ async function update(scene, type, entries) {
 function deletionTargets(scene, type, params) {
   const collection = scene.getEmbeddedCollection(type);
   if (params.createdByMcp || params.callId) {
+    if (params.ids) throw new Error("Nothing deleted: pass ids, or createdByMcp/callId, not both");
     return collection.filter(d => {
       const f = d.flags?.[MODULE_ID];
       return f?.createdBy && (!params.callId || f.callId === params.callId);

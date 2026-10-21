@@ -182,3 +182,22 @@ test("relay: Region code behaviors in placeable params are stored code", () => {
   assert.ok(findStoredCode(update).length > 0);
   assert.equal(relayRefusal("placeable", { action: "create", type: "Wall", entries: [{ c: [0, 0, 1, 1] }] }, false), null);
 });
+
+test("delete: ids together with createdByMcp or callId is refused, nothing deleted", async () => {
+  const { writes } = fakeWorld();
+  await placeable({ action: "create", type: "Wall", entries: [{ c: [0, 0, 1, 1] }, { c: [2, 2, 3, 3] }] });
+  await assert.rejects(placeable({ action: "delete", type: "Wall", ids: ["id1"], createdByMcp: true }), /pass ids, or createdByMcp\/callId, not both/);
+  await assert.rejects(placeable({ action: "delete", type: "Wall", ids: ["id1"], callId: "x" }), /not both/);
+  assert.equal(writes.filter((w) => w.op === "delete").length, 0);
+});
+
+test("create: a document vetoed by another module's preCreate hook is reported, not thrown", async () => {
+  const { scene, coll } = fakeWorld();
+  const real = scene.createEmbeddedDocuments;
+  scene.createEmbeddedDocuments = async (type, data, opts) => { await real(type, data, opts); coll(type).delete(data[1]._id); return []; };
+  const r = await placeable({ action: "create", type: "Wall", entries: [{ c: [0, 0, 1, 1] }, { c: [2, 2, 3, 3] }, { c: [4.4, 4, 5, 5] }] });
+  assert.equal(r.created, 2);
+  assert.deepEqual(r.ids, ["id1", "id3"]);
+  assert.deepEqual(r.notCreated, [1]);
+  assert.deepEqual(r.storedDifferently, [{ index: 2, id: "id3", field: "c.0", sent: 4.4, stored: 4 }]);
+});

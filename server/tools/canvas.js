@@ -112,6 +112,7 @@ export function registerCanvasTools(mcp) {
       distance:    z.number().min(0).optional().describe("[range] Radius in scene units (e.g. feet)."),
       lineOfSight: z.boolean().optional().describe("[range] Keep only tokens with no sight wall in between."),
       waypoints:   z.array(z.object({ x: z.number(), y: z.number() })).min(2).max(100).optional().describe("[measure] Pixel points to measure along, instead of from/to."),
+      level:       z.string().optional().describe("[path/collision/range] Level (id or name) whose walls are tested. Default: the from token's Level, else the Level on the canvas."),
       sceneId:     z.string().optional().describe("[measure] Scene to measure on. Default: the scene on the canvas."),
     }, "query_grid");
 

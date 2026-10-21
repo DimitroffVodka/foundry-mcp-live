@@ -288,7 +288,7 @@ export function registerWorldAuthoringTools(mcp) {
     + "move none|normal, sight/light/sound none|limited|normal|proximity|distance, dir both|left|right. "
     + "action 'delete' needs type + ids, or createdByMcp:true for every document of that type this tool created "
     + "(it flags them flags.foundry-mcp-live.createdBy), or callId (returned by create) for exactly what one "
-    + "create call made; call it with dryRun:true first to see what would go. "
+    + "create call made (never both ids and a selector); call it with dryRun:true first to see what would go. "
     + "Permanent. "
     + "action 'door' needs ids (door walls) + state open|closed|locked. "
     + "Call scene_read action 'placeables' first to find ids, and query_grid mode 'collision' after building "
