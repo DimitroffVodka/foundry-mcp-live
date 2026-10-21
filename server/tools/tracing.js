@@ -11,6 +11,37 @@ import { requestFoundry, callFoundry } from "../lib/foundry-rpc.js";
 import { diffProjections }       from "../lib/snapshot-store.js";
 import { WORKFLOW_PRESETS, PRESET_KEYS, presetCatalogue }
                                  from "../lib/workflow-presets.js";
+import { ALLOW_EVAL, ALLOW_SELF_TEST, ALLOW_WRITE } from "../lib/config.js";
+import { RELAY_TOOLS }           from "../../module/lib/relay-guard.js";
+
+// Bridge handlers that only the env-gated tools reach (world-authoring.js and
+// chat 'send'). trace's trigger must not become a way around those gates.
+// server/test/trace-trigger.test.js keeps this in step with world-authoring.js.
+export const WRITE_GATED_HANDLERS = new Set([
+  "create_actor", "create_actor_from_compendium", "update_actor", "delete_actor",
+  "start_combat", "advance_combat", "end_combat", "request_roll", "request_roll_typed",
+  "request_item_use", "request_attack_roll", "request_damage_roll", "apply_damage",
+  "create_scene", "update_scene", "activate_scene", "delete_scene", "send_chat_message",
+  "request_ask", "stage",
+]);
+
+/** Why `trigger.tool` may not fire under these gates, or null if it may. */
+export function triggerRefusal(tool,
+    gates = { write: ALLOW_WRITE, eval: ALLOW_EVAL, selfTest: ALLOW_SELF_TEST }) {
+  if (!RELAY_TOOLS.has(tool)) {
+    return `"${tool}" is not a bridge handler any server tool routes to; trigger only fires those (e.g. use_item).`;
+  }
+  if (WRITE_GATED_HANDLERS.has(tool) && !gates.write) {
+    return `"${tool}" is write-gated; the server has FOUNDRY_MCP_ALLOW_WRITE unset.`;
+  }
+  if (tool === "self_test" && !(gates.write && gates.selfTest)) {
+    return `"self_test" needs FOUNDRY_MCP_ALLOW_WRITE=1 and FOUNDRY_MCP_ALLOW_SELF_TEST=1.`;
+  }
+  if ((tool === "evaluate" || tool === "job_result") && !gates.eval) {
+    return `"${tool}" is disabled; the server has FOUNDRY_MCP_ALLOW_EVAL=0.`;
+  }
+  return null;
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -23,7 +54,8 @@ export function registerTracingTools(mcp) {
     + "optional substring filter on event name. Don't run two socket traces in parallel. "
     + "'workflow' — one-call investigation: expands a named PRESET into the exact hook list (Foundry "
     + "has no wildcard hook matching), opens a trace window, optionally snapshots `watch` actors "
-    + "before/after with a structural diff, and optionally fires `trigger` (any bridge tool) inside "
+    + "before/after with a structural diff, and optionally fires `trigger` (a bridge handler a server tool "
+    + "routes to; write-gated ones need FOUNDRY_MCP_ALLOW_WRITE=1) inside "
     + "the window. For Midi presets the trigger MUST be `use_item` (calls item.use() through Midi), "
     + "NOT request_item_use (bypasses Midi).\n\n"
     + "Presets:\n  " + presetCatalogue(),
@@ -70,6 +102,11 @@ export function registerTracingTools(mcp) {
         // ---- workflow (trace_workflow behaviour, unchanged server-side orchestration) ----
         const { preset, watch, select, extraHooks, trigger,
                 triggerDelayMs, count, timeoutMs, until } = args;
+
+        if (trigger?.tool) {
+          const refusal = triggerRefusal(trigger.tool);
+          if (refusal) return { content: [{ type: "text", text: `Error: trigger refused: ${refusal}` }] };
+        }
 
         const def = WORKFLOW_PRESETS[preset];
         if (!def) {

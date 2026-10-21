@@ -9,7 +9,13 @@
  * Bridge handlers a server tool actually routes to. Anything else in the
  * handlers table (leftovers from the tool consolidations) is refused over the
  * relay. server/test/relay-guard.test.js keeps this list and the server tools
- * in step in both directions.
+ * in step in both directions. trace's `trigger` (server/tools/tracing.js) is
+ * held to the same list on the direct path.
+ *
+ * The leftover handlers stay in bridge.js rather than being deleted: with both
+ * dispatch paths allow-listed no MCP call reaches them, sibling branches are
+ * reviving some (list_journals), and evaluate scripts can still call
+ * mcpBridge.handlers directly, which is evaluate's own gate to decide.
  */
 export const RELAY_TOOLS = new Set([
   "get_debug_snapshot", "get_game_info", "list_actors", "get_actor", "list_modules",
