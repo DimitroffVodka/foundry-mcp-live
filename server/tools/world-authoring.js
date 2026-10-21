@@ -272,6 +272,43 @@ export function registerWorldAuthoringTools(mcp) {
       delete:   [],
     });
 
+  // --- Placeable (scene authoring; bridge handler `placeable`, placeables.js) ---
+  registerRoutedTool(mcp, "placeable",
+    "Author scene placeables: walls, lights, sounds, tiles, drawings, regions, map notes. One type per call, "
+    + "up to 200 entries. Works without a drawn canvas (document APIs). "
+    + "action 'create' needs type + entries (each entry is that document's data, e.g. Wall {c:[x1,y1,x2,y2]} in "
+    + "pixels; Region {name, shapes:[{type:'rectangle',x,y,width,height}], behaviors}). "
+    + "action 'update' needs type + entries, each with _id plus the fields to change (dotted keys allowed). "
+    + "Every entry is validated by Foundry's data model first; one bad entry means nothing is written and the "
+    + "error lists each bad entry. The result's storedDifferently lists fields Foundry stored differently from "
+    + "what was sent (rounded coordinates, clamped values). "
+    + "On a scene with several Levels (v14) pass level (id or name) or each entry's levels; an entry with "
+    + "neither is refused, because an empty levels list puts the placeable on every Level. "
+    + "Wall fields take plain words as well as CONST numbers: door none|door|secret, ds closed|open|locked, "
+    + "move none|normal, sight/light/sound none|limited|normal|proximity|distance, dir both|left|right. "
+    + "action 'delete' needs type + ids, or createdByMcp:true for every document of that type this tool created "
+    + "(it flags them flags.foundry-mcp-live.createdBy), or callId (returned by create) for exactly what one "
+    + "create call made (never both ids and a selector); call it with dryRun:true first to see what would go. "
+    + "Permanent. "
+    + "action 'door' needs ids (door walls) + state open|closed|locked. "
+    + "Call scene_read action 'placeables' first to find ids, and query_grid mode 'collision' after building "
+    + "walls to check they block what you meant. sceneId defaults to the active scene.",
+    {
+      action:       z.enum(["create", "update", "delete", "door"]).describe("Operation."),
+      type:         z.enum(["Wall", "AmbientLight", "AmbientSound", "Tile", "Drawing", "Region", "Note"]).optional()
+                     .describe("[create/update/delete] Placeable document type. 'door' is always Wall."),
+      sceneId:      z.string().optional().describe("Target scene id. Default: active scene."),
+      entries:      z.array(z.record(z.string(), z.any())).max(200).optional()
+                     .describe("[create] Document data, one per placeable. [update] {_id, ...fields to change}."),
+      ids:          z.array(z.string()).max(200).optional().describe("[delete/door] Document ids."),
+      level:        z.string().optional().describe("[create] Level id or name for entries without their own levels (v14 multi-level scenes)."),
+      createdByMcp: z.boolean().optional().describe("[delete] Select every document of `type` this tool created instead of ids."),
+      callId:       z.string().optional().describe("[delete] Select only the documents one create call made (its result's callId)."),
+      dryRun:       z.boolean().optional().describe("[delete] List what would be deleted; delete nothing."),
+      state:        z.enum(["open", "closed", "locked"]).optional().describe("[door] New door state."),
+      audit:        z.boolean().optional().describe(AUDIT_DESC),
+    });
+
   // --- Stage (live-play staging; bridge handler `stage`, live-play.js) ---
   registerRawTool(mcp, "stage",
     "Put things in front of the players during play. "

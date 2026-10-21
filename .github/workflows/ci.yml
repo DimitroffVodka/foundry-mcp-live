@@ -50,12 +50,14 @@ jobs:
       - name: Module content stamp is current
         run: node scripts/stamp-module.mjs --check
 
-      - name: Manifest is valid JSON and matches the server version
+      - name: Manifests are valid JSON and agree on the version
         run: |
           MODULE_VERSION=$(jq -r .version module/module.json)
           SERVER_VERSION=$(jq -r .version server/package.json)
-          echo "module.json: $MODULE_VERSION / server package.json: $SERVER_VERSION"
-          if [ "$MODULE_VERSION" != "$SERVER_VERSION" ]; then
-            echo "::error::module.json ($MODULE_VERSION) and server/package.json ($SERVER_VERSION) disagree"
+          PLUGIN_VERSION=$(jq -r .version plugins/foundry-mcp-live/.claude-plugin/plugin.json)
+          jq empty .claude-plugin/marketplace.json plugins/foundry-mcp-live/.mcp.json
+          echo "module.json: $MODULE_VERSION / server package.json: $SERVER_VERSION / plugin.json: $PLUGIN_VERSION"
+          if [ "$MODULE_VERSION" != "$SERVER_VERSION" ] || [ "$PLUGIN_VERSION" != "$SERVER_VERSION" ]; then
+            echo "::error::module.json ($MODULE_VERSION), server/package.json ($SERVER_VERSION) and the Claude Code plugin.json ($PLUGIN_VERSION) disagree"
             exit 1
           fi

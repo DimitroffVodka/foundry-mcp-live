@@ -23,6 +23,14 @@ If the named user isn't connected, the tool errors with `"No bridge connected fo
 
 **Why it matters:** testing module behavior from a player's perspective without losing the GM session. A GM-side `evaluate` won't surface permission-gated bugs the way a player-side one will.
 
+**Reads through a player's bridge.** Foundry sends every client the full source of every document, including GM-only HTML; the sheets hide it only when they render. So document reads routed to a non-GM apply the sheet's rules before replying: `document` (actor/item/compendium/actorItems, `derived` too), `search_compendium` with `full`, `get_data_model`'s sample, `token` details, `snapshot` take, `scene_read` placeables, `chat` read/events and `roll` table draws.
+- Unrevealed `<section class="secret">` blocks are removed unless the player owns the document (chat: owns the speaker's actor), as `TextEditor.enrichHTML` does with `secrets: false`. Revealed secrets stay. Journals follow the same owner rule (`document` action `"journal"`).
+- Flags of namespaces other than `core` and the game system are dropped (modules such as GM Notes keep GM-only text in flags). `document` takes `flags: true` to keep them.
+- Every `ownership` map is cut to `{ <playerId>: <their level> }`, so a read does not reveal who else owns or observes what.
+- Chat content the player's own chat log hides (blind rolls, whispers to others) comes back empty with `contentHidden: true` and no roll results; the message itself is still listed. `get_debug_snapshot`'s chat preview follows the same rules.
+
+A GM bridge (the default route) returns everything unchanged.
+
 ### `audit` (optional, mutating tools only)
 
 Every tool that modifies the Foundry world (creates, updates, or deletes documents) accepts an optional `audit: true` parameter. When set, the tool returns an `audit` block containing a flight recorder of the mutation.
@@ -30,9 +38,13 @@ Every tool that modifies the Foundry world (creates, updates, or deletes documen
 - **`audit.before`** — snapshot of the affected document(s) *before* the change.
 - **`audit.after`** — snapshot *after* the change.
 - **`audit.diff`** — structured delta of what actually changed. Noisy metadata (timestamps, stats, IDs) is automatically filtered.
-- **`audit.undo`** — dry instructions for how to revert the change (e.g. rollback data or a delete command).
+- **`audit.undo`** — dry instructions for how to revert the change (e.g. rollback data or a delete command). To actually revert it, use [`changes`](#changes): every write call is logged there whether or not `audit` was set.
 
 **Efficiency Note:** Full snapshots are limited to 10 documents per call to keep context window usage low. If more are affected, the audit will note the truncation. Use this to self-verify your work in an **Act -> Validate** loop.
+
+### Read-only toggle
+
+Every bridge handler declares its access — `read`, `write` or `delete` — in `module/lib/handler-access.js`, and the bridge's single dispatcher checks it before any handler runs, on the direct and the relay path alike. A handler with no declaration is refused as unknown (a test fails when one is missing). `write` and `delete` handlers run only while the world setting **"Allow AI to modify the world"** (`foundry-mcp-live.allowWorldMutations`, default on) is exactly `true`; when it is off, unreadable, or holds anything else, they are refused with a message naming that setting. `write` includes everything that can change the world or other people's screens: chat, rolls posted to chat, dialogs, UI clicks, `evaluate` and `call_module_api`.
 
 The server-local tools are `list_connected_bridges`, `bridge_status`,
 `reload_foundry`, and the opt-in `relaunch_client`. They inspect or
@@ -51,7 +63,7 @@ is not a promise of full v13 module support.
 | Actor ownership | Friendly level names are resolved to numeric ownership levels before update | Same; avoids writing role names or raw user-facing labels into the document |
 | Scene background/foreground/fog | Legacy Scene fields (`background`, `backgroundColor`, `foreground`, `fogExploration`) | `background`/`foreground`/level fog map to the default embedded Level; exploration maps to `Scene.fog.mode` |
 | Scene Levels | Not available; level-only inputs error clearly | Native embedded `Level` CRUD |
-| Regions | Passed through to the core Region schema | Passed through to the core Region schema, including level membership |
+| Regions and other placeables (`placeable`) | Validated by the core document schema, then created/updated as given | Same, including Region level membership |
 | RollTable results | No dedicated authoring tool; legacy `.text` is not written | `self_test` validates `TableResult.description` |
 | Compendium configuration | No write tool calls `pack.configure`; label/ownership schema drift is therefore not exposed | Same |
 | Snapshots/diffs | Read-only | Read-only |
@@ -64,7 +76,9 @@ Note: several former dedicated write tools (folders, journals, regions, scene
 levels, actor items/ownership, measured templates) were removed in the
 2026-08 reduction; those operations are now done via `evaluate` against the
 same document APIs this table describes. Journal *reads* are back on the merged
-tools: `list` type `"journal"` and `document` action `"journal"`.
+tools: `list` type `"journal"` and `document` action `"journal"`. Regions and the
+other scene placeables (walls, lights, sounds, tiles, drawings, notes) are back
+too, as the one merged `placeable` tool.
 
 ---
 
@@ -205,6 +219,7 @@ Read one document. The `action` discriminator picks the kind.
   - `pack` **[compendium, required]**, `id?` / `name?` **[compendium]** — fetch one entry from a pack.
   - `actorId` **[actorItems, required]** — actor id or exact name; `filter?` — item type (e.g. `"weapon"`).
   - `derived?` **[actor/item/compendium]** — return the prepared values instead of the stored source (see Returns). Default `false`.
+  - `flags?` **[actor/item/compendium]** — through a non-GM bridge, keep other modules' flags (see [Reads through a player's bridge](#targetuser-optional-every-routed-tool)). No effect for a GM. Default `false`.
   - **[journal]** `pack?` — read the entry from a compendium instead of the world; `page?` — one page by id or exact name; `offset?` / `limit?` — page pagination (`limit` default 20, max 100); `maxChars?` — Markdown budget for the reply (default 20000, max 200000); `textOffset?` — with `page`, start at this character (continue a cut page); `enrich?` — run the HTML through `TextEditor.enrichHTML` first; `secrets?` — include GM secret blocks (default `false`, in both modes).
 - **Returns**:
   - `actor` — full `actor.toObject()`: `_id, name, type, img, system, items, effects, prototypeToken, folder, sort, ownership, flags`. **Heavy.**
@@ -270,15 +285,17 @@ Read the active scene. The `action` discriminator picks the depth.
 - **`action: "placeables"`** — the embedded collections `summary` doesn't return. Returns `[document.toObject()]` or the projected subset. On Foundry v14+, `MeasuredTemplate` items come back in the legacy template shape (`t`/`x`/`y`/`distance`/…) but are stored as Region documents under the hood (v14 merged MeasuredTemplate into Region).
 
 ### `query_grid`
-Query spatial grid state as structured data — the video-game approach to map awareness. Returns per-cell booleans for explored (fog), visible (current line-of-sight), and occupied (token present). Cheaper and more deterministic than screenshots for spatial reasoning.
+Query spatial state as structured data — the video-game approach to map awareness. Read-only: nothing moves. Cheaper and more deterministic than screenshots for spatial reasoning.
 
-- **Params** (one of):
-  - `cells?` — array of `{gx, gy}` grid coords to query individually.
-  - `region?` — `{minGX, minGY, maxGX, maxGY}` bounding box (inclusive). Max 2500 cells.
-- **Returns**:
-  - `sceneId, gridSize, fogExploration, cellCount`
-  - `cells: [{ gx, gy, x, y, explored, visible, occupied, occupiedBy? }]` — `x,y` are pixel centers. `explored` is fog exploration state (always `true` when fog is off). `visible` is current line-of-sight (always `true` for GMs). `occupied` is `true` when a token's center lies in this cell; `occupiedBy` identifies that token.
-- **Usage pattern**: `query_grid` with a `region` around a token → find `explored: false` cells → `token {action:"move", onlyUnexplored:true}` to move there.
+- **Discriminator**: `mode?` — `"cells"` (default), `"path"`, `"collision"`, `"range"`, or `"measure"`.
+- `from` / `to` take a token (id, name or linked actor name; its center is used) or a pixel point `{x, y}`.
+- **Walls are canvas-bound**: `path`, `collision` and `range` test walls, which Foundry only loads for the scene drawn on the routed client's canvas — view that scene first (they error otherwise). On Foundry v14 walls belong to a Level: they test the walls of `level?` (id or name), default the `from` token's Level (the scene's initial Level if it has none), or for a point the Level on the canvas, and report it as `level` (id; `null` on v13). `measure` works without a drawn canvas, on any scene.
+- **`cells`** — `cells?` (array of `{gx, gy}`) or `region?` (`{minGX, minGY, maxGX, maxGY}`, inclusive; max 2500 cells). Returns `sceneId, gridSize, fogExploration, cellCount` and `cells: [{ gx, gy, x, y, explored, visible, occupied, occupiedBy? }]` — `x,y` are pixel centers; `explored` is fog exploration state (always `true` when fog is off); `visible` is current line-of-sight (always `true` for GMs); `occupied` is `true` when a token's center lies in the cell.
+- **`path`** — `from`, `to`, `maxNodes?` (1–10000, default 2500). The same wall-aware A* that `token {action:"move", pathed:true}` uses (square-grid 8-way steps, closed doors block). Returns `{ reachable, steps, waypoints: [{x, y, gx, gy}], distance, cost, spaces, diagonals, units }` (waypoints are top-left cell corners, as `token` move takes them), or `{ reachable: false, reason }` — the reason says whether walls cut the route or `maxNodes` ran out.
+- **`collision`** — `from`, `to`, `types?` (subset of `move`/`sight`/`light`/`sound`, default all). Calls each `CONFIG.Canvas.polygonBackends[type].testCollision`, so door states, limited, proximity and one-way walls count exactly as core counts them. Returns per type `{ blocked, walls: [wallIds], at?: {x, y} }` (`at` = first contact).
+- **`range`** — `from`, `distance` (scene units), `lineOfSight?`. Tokens whose center is within `distance` of `from` (measured with `scene.grid.measurePath`), nearest first, excluding `from` itself; `lineOfSight: true` drops tokens behind a sight-blocking wall. Returns `{ count, units, tokens: [{ id, name, actorId, x, y, distance }] }`.
+- **`measure`** — `from` + `to`, or `waypoints` (2–100 pixel points); `sceneId?` (default: the scene on the canvas). `scene.grid.measurePath`, so the core diagonal rule applies. Returns `{ distance, cost, spaces, diagonals, euclidean, units, diagonalRule }`.
+- **Usage patterns**: `cells` around a token → find `explored: false` cells → `token {action:"move", onlyUnexplored:true}`. `path` before `token` move to learn whether a destination is reachable and how far it is. `collision` after `placeable` creates walls, to confirm they block what was meant.
 
 ---
 
@@ -289,7 +306,7 @@ All token operations on the active scene. The `action` discriminator selects the
 
 - **Discriminator**: `action` — `details`, `move`, `create`, `update`, `delete`, `toggleCondition`, `target`, or `setLevel`.
 - **`action: "details"`** — the most information-dense token query. `tokenName` (required). Returns geometry/state (`x, y, width, height` in grid units, `rotation`, `elevation`, `hidden`, `disposition`, `lockRotation`, `sort`, `img`), `sight` (vision range/angle/mode/tint), `light` (bright/dim radii, animation, darkness range, shader knobs), plus the linked **`actor`** snapshot (full `system` block, `statuses` array, `effects` list).
-- **`action: "move"`** — `tokenName`, `x`, `y` (required). `pathed: false` (default) = straight teleport (no wall check; `animate: false` for instant placement). `pathed: true` = **smart move**: A* against scene walls (`pathCost` returned), only the final hop animates, `canOpenDoors: true` opens doors en route (returns `doorsOpened`), `elevation`/`rotation` apply to the final waypoint. `onlyUnexplored: true` rejects fog-explored destinations. A* node cap 2500 — very long paths may fail, retry with a shorter hop.
+- **`action: "move"`** — `tokenName`, `x`, `y` (required). `pathed: false` (default) = straight teleport (no wall check; `animate: false` for instant placement). `pathed: true` = **smart move**: A* against scene walls (`pathCost` returned), only the final hop animates, `canOpenDoors: true` opens doors en route (returns `doorsOpened`), `elevation`/`rotation` apply to the final waypoint. `onlyUnexplored: true` rejects fog-explored destinations. A* node cap 2500 — very long paths may fail; `query_grid {mode:"path", maxNodes}` checks a route with a higher cap first, or retry with a shorter hop.
 - **`action: "create"`** — `actorId` (required); `x/y` pixels OR `gridX/gridY` cells (cells win); `hidden`, `name`, `rotation`, `sceneId` optional. Inherits the actor's prototype token (image, scale, vision, disposition).
 - **`action: "update"`** — `tokenName`, `updates` (required object). Whitelisted keys only: `x, y, width, height, rotation, hidden, disposition, name, elevation, lockRotation, sort, alpha, tint`. Anything else is silently dropped — `sight`/`light`/vision sub-objects need `evaluate`.
 - **`action: "delete"`** — `tokens` array (ids/names/actor names). Permanent; Foundry has no undo. Returns `{ deleted, missing }`.
@@ -328,6 +345,21 @@ Chat log access. The `action` discriminator selects the operation.
 - **`action: "events"`** — the live event cursor (not gated). Every client keeps a ring buffer of its last 300 events, recorded from `createChatMessage` (kind `"chat"`, or `"roll"` when the message carries rolls) plus `request {action:"ask"}` answers shown on that client (kind `"ask"`). Each event has a monotonic `seq`. Params: `sinceSeq?` (only events after it), `limit?` (newest kept, default 50, max 300), filters `kind?`, `user?` (author name/id), `speaker?` (alias/actor id), `contains?` (case-insensitive text/flavor substring). Returns `{ latestSeq, events: [{ seq, at, kind, messageId, user, userId, speaker, actorId, flavor?, content, rolls?, whisper }], dropped?, reset? }`. `dropped` means the cursor fell off the ring; `reset` means the client reloaded (seq restarted) and the read started from the beginning. Whispers the routed client can see are included and flagged. Unlike `trace`, it is always recording, so nothing between two calls is missed.
 - **`action: "wait"`** — block until the next event matching the same filters, or return at once if one is already buffered after `sinceSeq` (omit `sinceSeq` to wait for a new one only). `timeoutSeconds?` default 30, **max 40**: MCP clients give up near 60 s, so wait in rounds. Returns `{ status: "matched", latestSeq, event }` or `{ status: "timeout", latestSeq }`. A reply that lands after a timeout is still in the buffer — read it with `events`.
 - **Pattern — ask the table and wait for a reply**: `chat {action:"events", limit:1}` → keep `latestSeq` → post the question (`chat send`) → `chat {action:"wait", sinceSeq, user:"Alice"}`; on timeout call `wait` again with the same `sinceSeq`.
+
+---
+
+## Change log
+
+### `changes`
+The routed client's log of every document a write call created, updated or deleted, with undo. Always registered; `undo` writes, so it respects the read-only toggle.
+
+- **Discriminator**: `action` — `"list"` or `"undo"`.
+- **What is logged**: while a handler declared `write`/`delete` runs (see [Read-only toggle](#read-only-toggle)), each document create/update/delete that browser asks for is one entry `{ id, callId, tool, time, action, documentName, uuid, name, parentUuid, pack, changed, undoable, reason, undoneBy? }` with the document source before and after. Each bridge tab has its own log of its last 200 entries. On a GM client the log is also stored in one hidden JournalEntry ("MCP change log (do not edit)", default ownership None, flagged `flags.foundry-mcp-live.changeStore`; `list` and `document` never show it), so it survives a reload of that tab: the tab's id lives in its `sessionStorage`, and the tab reloads its own log at `ready` with ids continuing where they stopped. The store holds 200 entries and 5,000,000 characters in total across tabs, oldest pruned first, and is written at most once a second (a change in the last second before a reload can be lost). A new tab or a relaunched browser starts an empty log; older tabs' entries stay in the store until pruned. On a player's bridge the log is memory only. **Players can read the store**: Foundry sends every world JournalEntry to every client when it joins, whatever its ownership, so the snapshots (including of documents since deleted) reach players' browsers even though their sidebar never shows it.
+- **`action: "list"`** — newest first. Params: `callId?`, `uuid?`, `limit?` (default 50, max 200); `entryId?` returns that one entry with its full `before`/`after`. Returns `{ total, stored, entries, neverLogged }`; `stored` says whether this client keeps the log across reloads.
+- **`action: "undo"`** — `entryId` undoes one entry, `callId` every entry of one call, neither the latest call. Before writing anything every step is checked: the entry is undoable; the user may do the reverse action, and changes made by `FOUNDRY_MCP_ALLOW_WRITE` tools need that gate on now; no drift — no later entry on the same document, `_stats.modifiedTime` unchanged, and the document still equal to the recorded `after`. Any problem refuses the whole undo: `{ ok: false, problems, wouldRun }`, nothing written. Otherwise each document goes back to its state before the earliest selected entry: updates are restored field by field (old values set, added keys removed with `-=`; embedded collections are their own entries), created documents are deleted, deleted ones recreated with `keepId`, newest first, and each step is read back: `{ ok: true, undoCallId, applied: [{ op, uuid, entries, fields?, readBack }] }`. The undo is itself a logged call, so undoing it redoes.
+- **Interrupted undo**: if a step fails, the steps before it stay applied and are marked undone; the failure result's `retry` (`{ callId }` or `{ entryId }` of the original selection) resumes, skipping them. Do not retry with no ids: the applied steps are logged under the undo's own call, so that would undo the undo. An undo whose entries are all undone already is refused (undo that undo call to put things back).
+- **Never undone**: chat messages, settings, users, macros (they are code) — undoing a whole call leaves these alone and lists them in `leftAlone`; one selected by `entryId` is refused — documents over the 200,000-character snapshot cap, and changes made while another write call was running on the same client (which call made them is uncertain). **Never logged**: pause, targeting, canvas view and level, dialogs and clicks on other screens, sounds, uploaded files, dice already rolled, `evaluate` jobs that finish after their call returns, changes from another browser tab, and anything before the tab first loaded the world (on a player's bridge, before its last reload).
+- A human editing in the bridge's own browser while a long call runs (for example `request` waiting for a player) is logged under that call; check `list` before undoing a call that waited on people.
 
 ---
 
@@ -547,6 +579,24 @@ Create, update, activate, or delete a scene.
 - **Discriminator**: `action` — `"create"`, `"update"`, `"activate"`, or `"delete"`.
 - **Params**: `name?` **[create]** (also rename on update), `width?` (default 4000), `height?` (default 3000), `gridType?`, `gridSize?` (default 100), `gridAlpha?`, `folderId?`, `activate?` (default true), `padding?`, `backgroundColor?`, `background?` (v14 maps to `Level.background`/`Level.textures`), `foreground?`, `levelFog?` (v14), `fog?` `{mode:0|1|2, colors}`, `fogExploration?` (compat boolean; false→`fog.mode 0`), plus **[update]** `grid?`, `navigation?`, `sort?`, `navName?`, `initial?`; **[activate/delete]** `sceneId?`/`sceneName?`; **[delete]** `force?` (required to delete the active scene), `audit?`.
 - **`delete`** — permanent; `force: true` required when the scene is active.
+
+### `placeable`
+Author scene placeables — walls, lights, sounds, tiles, drawings, regions, map notes — without `evaluate`. Works without a drawn canvas (plain document APIs). Respects the per-world read-only toggle and accepts `audit`.
+
+- **Discriminator**: `action` — `"create"`, `"update"`, `"delete"`, or `"door"`.
+- **`type`** — one per call: `"Wall"`, `"AmbientLight"`, `"AmbientSound"`, `"Tile"`, `"Drawing"`, `"Region"`, or `"Note"` (`door` is always Wall). `sceneId?` defaults to the active scene.
+- **`create`** — `entries` (1–200), each that document's own data, e.g. Wall `{c:[x1,y1,x2,y2]}` in pixels, Region `{name, shapes:[{type:"rectangle",x,y,width,height}], behaviors:[…]}`, AmbientLight `{x, y, config:{bright, dim}}`. Each created document gets `flags.foundry-mcp-live.createdBy = "placeable"` and `flags.foundry-mcp-live.callId`; the result returns that `callId`.
+- **Levels (v14)**: `level?` **[create]** (Level id or name) is applied to entries that have no `levels` of their own. On a scene with more than one Level, an entry with neither is refused: an empty `levels` set puts a placeable on *every* Level, which for a wall means it blocks on every floor. Pass `levels: []` on the entry when that is meant. Single-level scenes are unaffected.
+- **`update`** — `entries` (1–200), each `{_id, …fields to change}`; dotted keys (`"config.dim": 30`) work.
+- **All-or-nothing**: every entry is validated by Foundry's own data model (a throwaway construction for create, `updateSource` on a clone for update) before anything is written. One bad entry → nothing written, and the error names each bad entry by index.
+- **Read-back**: the result's `storedDifferently` lists `{index, id, field, sent, stored}` for every sent field Foundry stored differently — rounded wall coordinates, clamped volumes, and so on. Absent when everything stored as sent. If another module's `preCreate` hook vetoes some documents, the rest are still created and `notCreated` lists the vetoed entries' indexes (`created` counts only what exists) — do not retry the whole call.
+- **Plain words on walls** (case-insensitive; CONST numbers also accepted): `door` none/door/secret, `ds` closed/open/locked, `move` none/normal, `sight`/`light`/`sound` none/limited/normal/proximity/distance, `dir` both/left/right.
+- **`delete`** — `ids` (1–200), or `createdByMcp: true` for every document of that `type` this tool created, or `callId` for exactly what one create call made — `ids` together with `createdByMcp`/`callId` is refused. `dryRun: true` lists what would go (`{id, label}`) and deletes nothing — use it first. Any unknown id → nothing deleted. Undo with [`changes`](#changes) while it is in the change log.
+- **`door`** — `ids` (door walls) + `state` `"open"`/`"closed"`/`"locked"`. A non-door wall in the list → nothing written.
+- **Relay**: over the relay, Region `executeScript`/`executeMacro` behaviors (and behavior `system.source` updates) are refused unless the world allows evaluate over the relay — the same stored-code check every relayed write gets.
+- **Free text** (Note `text`, Drawing `text`, names) is stored as given; Foundry draws these as plain canvas labels and does not enrich them, so `@UUID`/`[[roll]]` syntax in them is inert.
+- **Returns**: `{ sceneId, type, callId, created, ids, notCreated?, storedDifferently? }` / `{ sceneId, type, updated, ids, storedDifferently? }`; delete `{ sceneId, type, deleted, documents }` (dry run `{ dryRun: true, wouldDelete, documents }`); door `{ sceneId, updated, ids, ds }`.
+- Check new walls with `query_grid {mode:"collision"}`.
 
 ### `stage`
 Put things in front of the players during play — the GM staging actions that used to need `evaluate`. Respects the per-world read-only toggle.

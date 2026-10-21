@@ -22,7 +22,7 @@ export const WRITE_GATED_HANDLERS = new Set([
   "start_combat", "advance_combat", "end_combat", "request_roll", "request_roll_typed",
   "request_item_use", "request_attack_roll", "request_damage_roll", "apply_damage",
   "create_scene", "update_scene", "activate_scene", "delete_scene", "send_chat_message",
-  "request_ask", "stage",
+  "request_ask", "stage", "placeable",
 ]);
 
 /** Why `trigger.tool` may not fire under these gates, or null if it may. */
@@ -31,6 +31,8 @@ export function triggerRefusal(tool,
   if (!RELAY_TOOLS.has(tool)) {
     return `"${tool}" is not a bridge handler any server tool routes to; trigger only fires those (e.g. use_item).`;
   }
+  // The changes tool adds the env gate to an undo's params; a trigger would let the caller supply them.
+  if (tool === "changes_undo") return `"changes_undo" cannot be a trigger; undo with the changes tool.`;
   if (WRITE_GATED_HANDLERS.has(tool) && !gates.write) {
     return `"${tool}" is write-gated; the server has FOUNDRY_MCP_ALLOW_WRITE unset.`;
   }
