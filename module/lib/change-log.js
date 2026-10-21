@@ -4,8 +4,9 @@
  * server/test/change-log.test.js drives it with fakes.
  *
  * One entry per document a call created, updated or deleted, with the
- * document's source before and after. The log lives in this browser's memory:
- * a reload empties it, and each bridge client keeps its own.
+ * document's source before and after. Each bridge tab keeps its own log; on a
+ * GM client it is also stored in one hidden JournalEntry (see "Store" below),
+ * so it survives a reload of that tab.
  */
 
 export const LOG_LIMIT = 200;
@@ -22,17 +23,20 @@ export const NOT_UNDOABLE = Object.freeze({
 /** What undo cannot reach at all, because it never becomes a logged document change. */
 export const OUTSIDE_THE_LOG = "pause, targeting, canvas view and level, dialogs and clicks on other "
   + "screens, sounds started or stopped, uploaded files, dice already rolled, evaluate jobs that "
-  + "finish after their call returns, anything done in another browser, and anything before this "
-  + "browser last loaded the world";
+  + "finish after their call returns, anything done in another browser tab, anything before this "
+  + "tab first loaded the world, and on a player's bridge anything before its last reload";
 
 export function createChangeLog({ limit = LOG_LIMIT, maxChars = MAX_SNAPSHOT_CHARS,
     now = () => new Date().toISOString() } = {}) {
   const entries = [];
   const active = new Map(); // callId -> tool, in start order
+  const dirty = new Set();   // entry ids not yet written to the store
   let seq = 0;
 
   return {
     entries,
+    dirty,
+    get seq() { return seq; },
     begin(callId, tool) { active.set(callId, tool); },
     end(callId) { active.delete(callId); },
     isActive(callId) { return active.has(callId); },
@@ -73,8 +77,15 @@ export function createChangeLog({ limit = LOG_LIMIT, maxChars = MAX_SNAPSHOT_CHA
         undoable: !reason, reason,
       };
       entries.push(entry);
+      dirty.add(entry.id);
       if (entries.length > limit) entries.splice(0, entries.length - limit);
       return entry;
+    },
+
+    /** Put back a stored log (oldest first). `storedSeq` is the highest seq ever used, so ids are never reused. */
+    load(stored, storedSeq = 0) {
+      entries.unshift(...stored.slice(-limit));
+      seq = Math.max(seq, storedSeq, ...stored.map(e => e.seq));
     },
 
     /** Entries an undo request names: one entry, one whole call, or the latest call. */
@@ -184,14 +195,14 @@ export async function undo(log, selected, env) {
         + `stay applied, and running the same undo again resumes from here`],
         applied, notRun: steps.slice(applied.length).map(stepSummary) };
     }
-    for (const id of s.entries) log.entries.find(e => e.id === id).undoneBy = env.callId;
+    for (const id of s.entries) { log.entries.find(e => e.id === id).undoneBy = env.callId; log.dirty?.add(id); }
     const after = await env.current(s.uuid);
     const target = s.op === "delete" ? null : s.data ?? selected.find(e => e.uuid === s.uuid).before;
     const mismatch = !target ? (after ? ["(still exists)"] : [])
       : !after ? ["(missing)"] : changedPaths(target, after, s.skip ?? ["_stats"]);
     applied.push({ ...stepSummary(s), readBack: mismatch.length ? { ok: false, paths: mismatch.slice(0, 20) } : { ok: true } });
   }
-  for (const e of selected) e.undoneBy = env.callId; // includes steps that needed no write
+  for (const e of selected) { e.undoneBy = env.callId; log.dirty?.add(e.id); } // includes steps that needed no write
   return { ok: true, undoCallId: env.callId, applied, ...(done.length ? { skipped: done.map(e => e.id) } : {}) };
 }
 
@@ -201,6 +212,43 @@ function tag(e) {
 
 function stepSummary({ op, uuid, documentName, name, entries, update }) {
   return { op, uuid, documentName, name, entries, ...(update ? { fields: Object.keys(update) } : {}) };
+}
+
+// ---------------------------------------------------------------------------
+// Store: one JournalEntry with default ownership NONE, flagged
+// flags.foundry-mcp-live.changeStore. Every entry is one JSON string under
+// flags.foundry-mcp-live.entries, keyed `${ms}_${tab}_${id}`, so a write sends
+// only the entries that changed and two bridge tabs never overwrite each other.
+// `seq.<tab>` keeps each tab's highest seq after its entries are pruned.
+// ---------------------------------------------------------------------------
+
+export const STORE_FLAG = "changeStore";
+export const STORE_OPTION = "mcpChangeStore"; // operation option: a store write, never logged
+
+export const isChangeStore = doc => !!doc?.flags?.["foundry-mcp-live"]?.[STORE_FLAG];
+
+const keyOf = (tab, e) => `${Date.parse(e.time) || 0}_${tab}_${e.id}`;
+const parseKey = k => { const [ms, tab, id] = k.split("_"); return { ms: +ms, tab, seq: +id.slice(1) }; };
+const byAge = (a, b) => { const x = parseKey(a), y = parseKey(b); return x.ms - y.ms || x.seq - y.seq; };
+
+/**
+ * What to write for `tab`: its `dirty` entries, then the whole store pruned to
+ * `limit` entries, oldest first (other tabs' entries included).
+ * @param {string[]} storedKeys keys under flags.foundry-mcp-live.entries now
+ * @returns {{ set: Record<string,string>, drop: string[] }}
+ */
+export function storeDelta(storedKeys, tab, dirty, limit = LOG_LIMIT) {
+  const set = Object.fromEntries(dirty.map(e => [keyOf(tab, e), JSON.stringify(e)]));
+  const all = [...new Set([...storedKeys, ...Object.keys(set)])].sort(byAge);
+  const drop = all.slice(0, Math.max(0, all.length - limit));
+  for (const k of drop) delete set[k];
+  return { set, drop: drop.filter(k => storedKeys.includes(k)) };
+}
+
+/** This tab's stored entries, oldest first, from the store's flags.foundry-mcp-live.entries. */
+export function loadStored(stored, tab) {
+  return Object.keys(stored ?? {}).filter(k => parseKey(k).tab === tab).sort(byAge)
+    .map(k => JSON.parse(stored[k]));
 }
 
 // ---------------------------------------------------------------------------

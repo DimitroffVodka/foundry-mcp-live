@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createChangeLog, restoreUpdate, undo, describeEntry } from "../../module/lib/change-log.js";
+import { createChangeLog, restoreUpdate, undo, describeEntry, storeDelta, loadStored } from "../../module/lib/change-log.js";
 
 const clone = (v) => structuredClone(v);
 
@@ -212,4 +212,71 @@ test("undo by entry id takes only that entry; an empty log says so", async () =>
   assert.deepEqual(log.select({ entryId: "c2" }).map(e => e.id), ["c2"]);
   const { env } = fakeWorld({});
   assert.deepEqual((await undo(createChangeLog(), [], env)).problems, ["nothing in the change log matches"]);
+});
+
+// The store as bridge.js keeps it: flags.foundry-mcp-live.entries, merged key by key.
+function writeTo(stored, tab, log, limit) {
+  const dirty = log.entries.filter(e => log.dirty.has(e.id));
+  log.dirty.clear();
+  const { set, drop } = storeDelta(Object.keys(stored), tab, dirty, limit);
+  for (const k of drop) delete stored[k];
+  return Object.assign(stored, set);
+}
+
+test("store: a reload gets the tab's own entries back, ids keep counting, undo marks are stored", async () => {
+  const time = (i) => new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString();
+  let i = 0;
+  const now = () => time(++i);
+  const stored = {};
+  const a = createChangeLog({ now });
+  a.begin("k1", "update_actor");
+  a.record({ callId: "k1", tool: "update_actor", action: "update", documentName: "Actor", uuid: "Actor.a1",
+    before: actor(5), after: actor(3) });
+  const other = createChangeLog({ now });
+  other.record({ callId: "x", action: "create", documentName: "Item", uuid: "Item.i", after: {} });
+  writeTo(stored, "tabA", a);
+  writeTo(stored, "tabB", other);
+  assert.equal(Object.keys(stored).length, 2);
+  assert.equal(a.dirty.size, 0);
+
+  // undo marks the entry dirty again, and the rewrite replaces it under the same key
+  const { env } = fakeWorld({ "Actor.a1": actor(3) });
+  assert.equal((await undo(a, a.select({}), env)).ok, true);
+  assert.deepEqual([...a.dirty], ["c1"]);
+  writeTo(stored, "tabA", a);
+  assert.equal(Object.keys(stored).length, 2);
+
+  // a reload: a fresh log loads only tabA's entries; the next id is c2, never a reused c1
+  const reloaded = createChangeLog({ now });
+  reloaded.load(loadStored(stored, "tabA"), 1);
+  assert.deepEqual(reloaded.entries.map(e => [e.id, e.undoneBy]), [["c1", "undo-1"]]);
+  assert.equal(reloaded.dirty.size, 0);
+  assert.equal(reloaded.record({ callId: "k2", action: "create", documentName: "Item", uuid: "Item.j", after: {} }).id, "c2");
+  assert.equal(reloaded.select({ entryId: "c1" })[0].before.system.hp, 5);
+
+  // a pruned-away entry's seq is still not reused when the stored high-water mark says so
+  const empty = createChangeLog();
+  empty.load([], 7);
+  assert.equal(empty.record({ callId: "k", action: "create", documentName: "Item", uuid: "Item.k", after: {} }).id, "c8");
+});
+
+test("store: total kept to the limit, oldest first across tabs; a pruned dirty entry is never written", () => {
+  const time = (i) => new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString();
+  let i = 0;
+  const stored = {};
+  const a = createChangeLog({ now: () => time(++i) });
+  const b = createChangeLog({ now: () => time(++i) });
+  for (const log of [a, b, a, b]) log.record({ callId: "k", action: "create", documentName: "Item", uuid: `Item.${i}`, after: {} });
+  writeTo(stored, "tabA", a, 3);
+  writeTo(stored, "tabB", b, 3);
+  assert.deepEqual(Object.keys(stored).sort().map(k => k.split("_").slice(1).join(" ")), ["tabB c1", "tabA c2", "tabB c2"]);
+  // limit 1 with two new entries: only the newest is written, older stored ones are dropped
+  for (let n = 0; n < 2; n++) a.record({ callId: "k", action: "create", documentName: "Item", uuid: `Item.n${n}`, after: {} });
+  const { set, drop } = storeDelta(Object.keys(stored), "tabA", a.entries.filter(e => a.dirty.has(e.id)), 1);
+  assert.deepEqual(Object.keys(set).map(k => k.split("_")[2]), ["c4"]);
+  assert.equal(drop.length, 3);
+  // seq order breaks ties inside one millisecond (c10 after c9, not before)
+  const same = createChangeLog({ now: () => time(0) });
+  for (let n = 0; n < 10; n++) same.record({ callId: "k", action: "create", documentName: "Item", uuid: `Item.s${n}`, after: {} });
+  assert.deepEqual(loadStored(writeTo({}, "t", same, 2), "t").map(e => e.id), ["c9", "c10"]);
 });
