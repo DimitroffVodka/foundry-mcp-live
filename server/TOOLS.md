@@ -55,7 +55,7 @@ is not a promise of full v13 module support.
 | Actor ownership | Friendly level names are resolved to numeric ownership levels before update | Same; avoids writing role names or raw user-facing labels into the document |
 | Scene background/foreground/fog | Legacy Scene fields (`background`, `backgroundColor`, `foreground`, `fogExploration`) | `background`/`foreground`/level fog map to the default embedded Level; exploration maps to `Scene.fog.mode` |
 | Scene Levels | Not available; level-only inputs error clearly | Native embedded `Level` CRUD |
-| Regions | Passed through to the core Region schema | Passed through to the core Region schema, including level membership |
+| Regions and other placeables (`placeable`) | Validated by the core document schema, then created/updated as given | Same, including Region level membership |
 | RollTable results | No dedicated authoring tool; legacy `.text` is not written | `self_test` validates `TableResult.description` |
 | Compendium configuration | No write tool calls `pack.configure`; label/ownership schema drift is therefore not exposed | Same |
 | Snapshots/diffs | Read-only | Read-only |
@@ -68,7 +68,9 @@ Note: several former dedicated write tools (folders, journals, regions, scene
 levels, actor items/ownership, measured templates) were removed in the
 2026-08 reduction; those operations are now done via `evaluate` against the
 same document APIs this table describes. Journal *reads* are back on the merged
-tools: `list` type `"journal"` and `document` action `"journal"`.
+tools: `list` type `"journal"` and `document` action `"journal"`. Regions and the
+other scene placeables (walls, lights, sounds, tiles, drawings, notes) are back
+too, as the one merged `placeable` tool.
 
 ---
 
@@ -274,15 +276,17 @@ Read the active scene. The `action` discriminator picks the depth.
 - **`action: "placeables"`** — the embedded collections `summary` doesn't return. Returns `[document.toObject()]` or the projected subset. On Foundry v14+, `MeasuredTemplate` items come back in the legacy template shape (`t`/`x`/`y`/`distance`/…) but are stored as Region documents under the hood (v14 merged MeasuredTemplate into Region).
 
 ### `query_grid`
-Query spatial grid state as structured data — the video-game approach to map awareness. Returns per-cell booleans for explored (fog), visible (current line-of-sight), and occupied (token present). Cheaper and more deterministic than screenshots for spatial reasoning.
+Query spatial state as structured data — the video-game approach to map awareness. Read-only: nothing moves. Cheaper and more deterministic than screenshots for spatial reasoning.
 
-- **Params** (one of):
-  - `cells?` — array of `{gx, gy}` grid coords to query individually.
-  - `region?` — `{minGX, minGY, maxGX, maxGY}` bounding box (inclusive). Max 2500 cells.
-- **Returns**:
-  - `sceneId, gridSize, fogExploration, cellCount`
-  - `cells: [{ gx, gy, x, y, explored, visible, occupied, occupiedBy? }]` — `x,y` are pixel centers. `explored` is fog exploration state (always `true` when fog is off). `visible` is current line-of-sight (always `true` for GMs). `occupied` is `true` when a token's center lies in this cell; `occupiedBy` identifies that token.
-- **Usage pattern**: `query_grid` with a `region` around a token → find `explored: false` cells → `token {action:"move", onlyUnexplored:true}` to move there.
+- **Discriminator**: `mode?` — `"cells"` (default), `"path"`, `"collision"`, `"range"`, or `"measure"`.
+- `from` / `to` take a token (id, name or linked actor name; its center is used) or a pixel point `{x, y}`.
+- **Walls are canvas-bound**: `path`, `collision` and `range` test walls, which Foundry only loads for the scene drawn on the routed client's canvas — view that scene first (they error otherwise). On Foundry v14 walls belong to a Level: they test the walls of `level?` (id or name), default the `from` token's Level (the scene's initial Level if it has none), or for a point the Level on the canvas, and report it as `level` (id; `null` on v13). `measure` works without a drawn canvas, on any scene.
+- **`cells`** — `cells?` (array of `{gx, gy}`) or `region?` (`{minGX, minGY, maxGX, maxGY}`, inclusive; max 2500 cells). Returns `sceneId, gridSize, fogExploration, cellCount` and `cells: [{ gx, gy, x, y, explored, visible, occupied, occupiedBy? }]` — `x,y` are pixel centers; `explored` is fog exploration state (always `true` when fog is off); `visible` is current line-of-sight (always `true` for GMs); `occupied` is `true` when a token's center lies in the cell.
+- **`path`** — `from`, `to`, `maxNodes?` (1–10000, default 2500). The same wall-aware A* that `token {action:"move", pathed:true}` uses (square-grid 8-way steps, closed doors block). Returns `{ reachable, steps, waypoints: [{x, y, gx, gy}], distance, cost, spaces, diagonals, units }` (waypoints are top-left cell corners, as `token` move takes them), or `{ reachable: false, reason }` — the reason says whether walls cut the route or `maxNodes` ran out.
+- **`collision`** — `from`, `to`, `types?` (subset of `move`/`sight`/`light`/`sound`, default all). Calls each `CONFIG.Canvas.polygonBackends[type].testCollision`, so door states, limited, proximity and one-way walls count exactly as core counts them. Returns per type `{ blocked, walls: [wallIds], at?: {x, y} }` (`at` = first contact).
+- **`range`** — `from`, `distance` (scene units), `lineOfSight?`. Tokens whose center is within `distance` of `from` (measured with `scene.grid.measurePath`), nearest first, excluding `from` itself; `lineOfSight: true` drops tokens behind a sight-blocking wall. Returns `{ count, units, tokens: [{ id, name, actorId, x, y, distance }] }`.
+- **`measure`** — `from` + `to`, or `waypoints` (2–100 pixel points); `sceneId?` (default: the scene on the canvas). `scene.grid.measurePath`, so the core diagonal rule applies. Returns `{ distance, cost, spaces, diagonals, euclidean, units, diagonalRule }`.
+- **Usage patterns**: `cells` around a token → find `explored: false` cells → `token {action:"move", onlyUnexplored:true}`. `path` before `token` move to learn whether a destination is reachable and how far it is. `collision` after `placeable` creates walls, to confirm they block what was meant.
 
 ---
 
@@ -293,7 +297,7 @@ All token operations on the active scene. The `action` discriminator selects the
 
 - **Discriminator**: `action` — `details`, `move`, `create`, `update`, `delete`, `toggleCondition`, `target`, or `setLevel`.
 - **`action: "details"`** — the most information-dense token query. `tokenName` (required). Returns geometry/state (`x, y, width, height` in grid units, `rotation`, `elevation`, `hidden`, `disposition`, `lockRotation`, `sort`, `img`), `sight` (vision range/angle/mode/tint), `light` (bright/dim radii, animation, darkness range, shader knobs), plus the linked **`actor`** snapshot (full `system` block, `statuses` array, `effects` list).
-- **`action: "move"`** — `tokenName`, `x`, `y` (required). `pathed: false` (default) = straight teleport (no wall check; `animate: false` for instant placement). `pathed: true` = **smart move**: A* against scene walls (`pathCost` returned), only the final hop animates, `canOpenDoors: true` opens doors en route (returns `doorsOpened`), `elevation`/`rotation` apply to the final waypoint. `onlyUnexplored: true` rejects fog-explored destinations. A* node cap 2500 — very long paths may fail, retry with a shorter hop.
+- **`action: "move"`** — `tokenName`, `x`, `y` (required). `pathed: false` (default) = straight teleport (no wall check; `animate: false` for instant placement). `pathed: true` = **smart move**: A* against scene walls (`pathCost` returned), only the final hop animates, `canOpenDoors: true` opens doors en route (returns `doorsOpened`), `elevation`/`rotation` apply to the final waypoint. `onlyUnexplored: true` rejects fog-explored destinations. A* node cap 2500 — very long paths may fail; `query_grid {mode:"path", maxNodes}` checks a route with a higher cap first, or retry with a shorter hop.
 - **`action: "create"`** — `actorId` (required); `x/y` pixels OR `gridX/gridY` cells (cells win); `hidden`, `name`, `rotation`, `sceneId` optional. Inherits the actor's prototype token (image, scale, vision, disposition).
 - **`action: "update"`** — `tokenName`, `updates` (required object). Whitelisted keys only: `x, y, width, height, rotation, hidden, disposition, name, elevation, lockRotation, sort, alpha, tint`. Anything else is silently dropped — `sight`/`light`/vision sub-objects need `evaluate`.
 - **`action: "delete"`** — `tokens` array (ids/names/actor names). Permanent; Foundry has no undo. Returns `{ deleted, missing }`.
@@ -566,6 +570,24 @@ Create, update, activate, or delete a scene.
 - **Discriminator**: `action` — `"create"`, `"update"`, `"activate"`, or `"delete"`.
 - **Params**: `name?` **[create]** (also rename on update), `width?` (default 4000), `height?` (default 3000), `gridType?`, `gridSize?` (default 100), `gridAlpha?`, `folderId?`, `activate?` (default true), `padding?`, `backgroundColor?`, `background?` (v14 maps to `Level.background`/`Level.textures`), `foreground?`, `levelFog?` (v14), `fog?` `{mode:0|1|2, colors}`, `fogExploration?` (compat boolean; false→`fog.mode 0`), plus **[update]** `grid?`, `navigation?`, `sort?`, `navName?`, `initial?`; **[activate/delete]** `sceneId?`/`sceneName?`; **[delete]** `force?` (required to delete the active scene), `audit?`.
 - **`delete`** — permanent; `force: true` required when the scene is active.
+
+### `placeable`
+Author scene placeables — walls, lights, sounds, tiles, drawings, regions, map notes — without `evaluate`. Works without a drawn canvas (plain document APIs). Respects the per-world read-only toggle and accepts `audit`.
+
+- **Discriminator**: `action` — `"create"`, `"update"`, `"delete"`, or `"door"`.
+- **`type`** — one per call: `"Wall"`, `"AmbientLight"`, `"AmbientSound"`, `"Tile"`, `"Drawing"`, `"Region"`, or `"Note"` (`door` is always Wall). `sceneId?` defaults to the active scene.
+- **`create`** — `entries` (1–200), each that document's own data, e.g. Wall `{c:[x1,y1,x2,y2]}` in pixels, Region `{name, shapes:[{type:"rectangle",x,y,width,height}], behaviors:[…]}`, AmbientLight `{x, y, config:{bright, dim}}`. Each created document gets `flags.foundry-mcp-live.createdBy = "placeable"` and `flags.foundry-mcp-live.callId`; the result returns that `callId`.
+- **Levels (v14)**: `level?` **[create]** (Level id or name) is applied to entries that have no `levels` of their own. On a scene with more than one Level, an entry with neither is refused: an empty `levels` set puts a placeable on *every* Level, which for a wall means it blocks on every floor. Pass `levels: []` on the entry when that is meant. Single-level scenes are unaffected.
+- **`update`** — `entries` (1–200), each `{_id, …fields to change}`; dotted keys (`"config.dim": 30`) work.
+- **All-or-nothing**: every entry is validated by Foundry's own data model (a throwaway construction for create, `updateSource` on a clone for update) before anything is written. One bad entry → nothing written, and the error names each bad entry by index.
+- **Read-back**: the result's `storedDifferently` lists `{index, id, field, sent, stored}` for every sent field Foundry stored differently — rounded wall coordinates, clamped volumes, and so on. Absent when everything stored as sent. If another module's `preCreate` hook vetoes some documents, the rest are still created and `notCreated` lists the vetoed entries' indexes (`created` counts only what exists) — do not retry the whole call.
+- **Plain words on walls** (case-insensitive; CONST numbers also accepted): `door` none/door/secret, `ds` closed/open/locked, `move` none/normal, `sight`/`light`/`sound` none/limited/normal/proximity/distance, `dir` both/left/right.
+- **`delete`** — `ids` (1–200), or `createdByMcp: true` for every document of that `type` this tool created, or `callId` for exactly what one create call made — `ids` together with `createdByMcp`/`callId` is refused. `dryRun: true` lists what would go (`{id, label}`) and deletes nothing — use it first. Any unknown id → nothing deleted. Undo with [`changes`](#changes) while it is in the change log.
+- **`door`** — `ids` (door walls) + `state` `"open"`/`"closed"`/`"locked"`. A non-door wall in the list → nothing written.
+- **Relay**: over the relay, Region `executeScript`/`executeMacro` behaviors (and behavior `system.source` updates) are refused unless the world allows evaluate over the relay — the same stored-code check every relayed write gets.
+- **Free text** (Note `text`, Drawing `text`, names) is stored as given; Foundry draws these as plain canvas labels and does not enrich them, so `@UUID`/`[[roll]]` syntax in them is inert.
+- **Returns**: `{ sceneId, type, callId, created, ids, notCreated?, storedDifferently? }` / `{ sceneId, type, updated, ids, storedDifferently? }`; delete `{ sceneId, type, deleted, documents }` (dry run `{ dryRun: true, wouldDelete, documents }`); door `{ sceneId, updated, ids, ds }`.
+- Check new walls with `query_grid {mode:"collision"}`.
 
 ### `stage`
 Put things in front of the players during play — the GM staging actions that used to need `evaluate`. Respects the per-world read-only toggle.

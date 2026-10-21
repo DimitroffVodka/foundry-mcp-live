@@ -49,6 +49,7 @@ export const HANDLER_ACCESS = Object.freeze({
   delete_items_from_actor: "delete", delete_journal_entry: "delete",
   delete_journal_page: "delete", end_combat: "delete", remove_scene_level: "delete",
   delete_region: "delete", delete_scene: "delete", self_test: "delete",
+  placeable: "delete", // one handler for create, update, delete and door
 });
 
 export const MUTATION_SETTING = "allowWorldMutations";

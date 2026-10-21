@@ -22,7 +22,7 @@ export const WRITE_GATED_HANDLERS = new Set([
   "start_combat", "advance_combat", "end_combat", "request_roll", "request_roll_typed",
   "request_item_use", "request_attack_roll", "request_damage_roll", "apply_damage",
   "create_scene", "update_scene", "activate_scene", "delete_scene", "send_chat_message",
-  "request_ask", "stage",
+  "request_ask", "stage", "placeable",
 ]);
 
 /** Why `trigger.tool` may not fire under these gates, or null if it may. */

@@ -31,6 +31,8 @@ import {
   splitSceneCompatibilityFields
 } from "./scene-compat.js";
 import { runFoundrySelfTest } from "./self-test.js";
+import { cellsBlocked as _cellsBlocked, findGridPath as _findGridPath, spatialQuery } from "./spatial.js";
+import { placeable } from "./placeables.js";
 import { shouldAutoConnect } from "./auto-connect.js";
 import { DEFAULT_BRIDGE_PORT, normalizeBridgeUrl, resolveBridgeUrl } from "./bridge-url.js";
 import { resolveBridgeToken } from "./bridge-token.js";
@@ -504,83 +506,8 @@ function _findToken(scene, ref) {
 }
 
 // ---------------------------------------------------------------------------
-// A* grid pathfinder + door-aware collision wrapper, used by `move_token_pathed`.
+// Door-aware collision wrapper for `move_token_pathed` (the A* is in spatial.js).
 // ---------------------------------------------------------------------------
-
-// Test whether a multi-cell token can move between two pixel corners without
-// any occupied subcell colliding. Origin/target are top-left pixel coords.
-function _cellsBlocked(fx, fy, tx, ty, tokenW, tokenH, gridSize, collision) {
-  for (let i = 0; i < tokenW; i++) {
-    for (let j = 0; j < tokenH; j++) {
-      const ox = fx + i * gridSize + gridSize / 2;
-      const oy = fy + j * gridSize + gridSize / 2;
-      const dx = tx + i * gridSize + gridSize / 2;
-      const dy = ty + j * gridSize + gridSize / 2;
-      if (collision.testCollision({ x: ox, y: oy }, { x: dx, y: dy }, { type: "move", mode: "any" })) return true;
-    }
-  }
-  return false;
-}
-
-function _findGridPath({ startX, startY, endX, endY, gridSize, collision, tokenWidth = 1, tokenHeight = 1, maxNodes = 2500 }) {
-  const DIRS = [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[-1,1],[1,-1],[1,1]];
-  const cheb = (ax, ay, bx, by) => Math.max(Math.abs(ax - bx), Math.abs(ay - by));
-  const key  = (gx, gy) => `${gx},${gy}`;
-
-  const sGX = Math.floor(startX / gridSize);
-  const sGY = Math.floor(startY / gridSize);
-  const eGX = Math.floor(endX   / gridSize);
-  const eGY = Math.floor(endY   / gridSize);
-  if (sGX === eGX && sGY === eGY) return { path: [], cost: 0 };
-
-  const open     = [{ gx: sGX, gy: sGY, g: 0, f: cheb(sGX, sGY, eGX, eGY) }];
-  const gScore   = new Map([[key(sGX, sGY), 0]]);
-  const cameFrom = new Map();
-  const closed   = new Set();
-  let explored   = 0;
-
-  while (open.length > 0) {
-    if (explored >= maxNodes) return null;
-    let minIdx = 0;
-    for (let i = 1; i < open.length; i++) if (open[i].f < open[minIdx].f) minIdx = i;
-    const cur = open[minIdx];
-
-    if (cur.gx === eGX && cur.gy === eGY) {
-      const path = [];
-      let k = key(eGX, eGY);
-      while (cameFrom.has(k)) {
-        const [gxs, gys] = k.split(",");
-        path.push({ x: Number(gxs) * gridSize, y: Number(gys) * gridSize });
-        k = cameFrom.get(k);
-      }
-      path.reverse();
-      return { path, cost: cur.g };
-    }
-
-    open.splice(minIdx, 1);
-    const curKey = key(cur.gx, cur.gy);
-    closed.add(curKey);
-    explored++;
-
-    for (const [dx, dy] of DIRS) {
-      const nx = cur.gx + dx;
-      const ny = cur.gy + dy;
-      const nk = key(nx, ny);
-      if (closed.has(nk)) continue;
-      if (_cellsBlocked(cur.gx * gridSize, cur.gy * gridSize, nx * gridSize, ny * gridSize, tokenWidth, tokenHeight, gridSize, collision)) continue;
-      const tg = cur.g + 1;
-      const existing = gScore.get(nk);
-      if (existing !== undefined && tg >= existing) continue;
-      cameFrom.set(nk, curKey);
-      gScore.set(nk, tg);
-      const f = tg + cheb(nx, ny, eGX, eGY);
-      const eIdx = open.findIndex(n => n.gx === nx && n.gy === ny);
-      if (eIdx >= 0) { open[eIdx].g = tg; open[eIdx].f = f; }
-      else open.push({ gx: nx, gy: ny, g: tg, f });
-    }
-  }
-  return null;
-}
 
 function _direction(a, b, c) { return (c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x); }
 function _onSegment(p, q, r) {
@@ -2194,6 +2121,9 @@ const handlers = {
   request_ask: (params = {}) => requestAsk(params, eventLog),
 
   stage,
+
+  /** Create/update/delete scene placeables and set door states (placeables.js). */
+  placeable,
 
   /**
    * Trigger an item on an actor (weapon, spell, feature) and capture the
@@ -4594,6 +4524,7 @@ const handlers = {
    * Grid coords are 0-indexed; pixel coords are returned for each cell center.
    */
   query_grid: (params = {}) => {
+    if (params.mode && params.mode !== "cells") return spatialQuery(params);
     const scene = game.scenes.active;
     if (!scene) return { error: "No active scene" };
     const gridSize = scene.grid.size;

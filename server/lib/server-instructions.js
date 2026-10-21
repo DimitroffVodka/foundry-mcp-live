@@ -24,7 +24,7 @@ ORIENT FIRST
 - Everything is exposed as TOOLS — there are no MCP resources or prompts, so don't look for them. \`tools/list\` is authoritative.
 
 CHOOSING A TOOL — prefer dedicated tools, NOT \`evaluate\`
-- ~30 dedicated tools cover actors, tokens, scenes, combat, items, dice rolls, journals, compendiums, chat, and debugging. Use them.
+- ~30 dedicated tools cover actors, tokens, scenes and their walls/lights/regions, combat, items, dice rolls, journals, compendiums, chat, and debugging. Use them.
 - \`evaluate\` runs arbitrary JavaScript and is a LAST RESORT — only when no dedicated tool fits. The dedicated tools encode system correctness that hand-written JS gets subtly wrong: \`apply_damage\` clamps HP, \`token\` move routes around walls, \`use_item\` runs the system's attack/crit logic — and the write tools carry audit/undo. Defaulting to \`evaluate\` produces wrong state (negative HP, tokens teleporting through walls) and skips the audit log.
 - Related operations are merged behind one tool with an \`action\` (or \`phase\`) parameter — e.g. \`actor_write\`, \`token\`, \`request\`, \`combat\`, \`scene\`. Read the tool's schema; its \`action\` enum lists the valid modes.
 
