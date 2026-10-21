@@ -83,18 +83,20 @@ const TEMPLATES = ${JSON.stringify(templateMap, null, 2)};
 const CSS = ${JSON.stringify(css ?? "")};
 const OVERRIDES = ${JSON.stringify(overrides)};
 
-const swap = (w) => {
+// "inherited" is the base's top-level css. A fixture that sets css once at the top and returns only parts from
+// build() would lose it otherwise: the harness lets build()'s keys override the top level.
+const swap = (w, inherited) => {
   const t = (x) => TEMPLATES[x] ?? x;
   const out = { ...w };
   if (w.template) out.template = t(w.template);
   if (w.parts) out.parts = w.parts.map((p) => ({ ...p, template: t(p.template) }));
-  out.css = (w.css ?? "") + "\\n" + CSS;
+  out.css = (w.css ?? inherited ?? "") + "\\n" + CSS;
   return { ...out, ...OVERRIDES };
 };
 
 export default {
   ...swap(base),
-  ...(base.build ? { build: (state) => swap(base.build(state)) } : {}),
+  ...(base.build ? { build: (state) => swap(base.build(state), base.css) } : {}),
 };
 `;
 }

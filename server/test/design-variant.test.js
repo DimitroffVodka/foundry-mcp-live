@@ -40,7 +40,7 @@ test("writeVariant generates a loadable fixture that swaps templates, appends cs
     assert.equal(built.parts[1].template, "tools/design-harness/variants/v1/win-list.hbs", "swapped, module-relative");
     assert.equal(fs.readFileSync(path.join(m.root, built.parts[1].template), "utf8"), "<ul>{{#each rows}}<li>{{name}}</li>{{/each}}</ul>");
     assert.equal(w.width, 420); assert.equal(w.title, 'a "quoted"\nTitle'); assert.deepEqual(w.classes, ["sde-ui"]);
-    assert.equal(built.css, "\n.x{color:red}", "css appended (base build() had none)");
+    assert.equal(built.css, "base{}\n.x{color:red}", "build() inherits the base's top-level css and appends the variant's");
     assert.equal(w.css, "base{}\n.x{color:red}", "top-level css appended after the base's");
   } finally { m.cleanup(); }
 });
@@ -124,5 +124,17 @@ test("discardVariant removes only what write_variant generated", () => {
     assert.ok(fs.existsSync(path.join(m.fx, "hand.mjs")));
     assert.match(discardVariant(m.root, "ghost").error, /no fixture/);
     assert.match(discardVariant(m.root, "../x").error, /`name` must be/);
+  } finally { m.cleanup(); }
+});
+
+test("a variant whose build() returns its own css appends to THAT, not to the top-level css", async () => {
+  const m = module_();
+  try {
+    fs.writeFileSync(path.join(m.fx, "own.mjs"), `export default { css: "top{}", build: () => ({ parts: [{ id: "p", template: "templates/own.hbs", context: {} }], css: "own{}" }) };`);
+    const r = writeVariant(m.root, { name: "ov", base: "own", css: ".y{}" });
+    assert.equal(r.error, undefined);
+    const w = await load(r.fixtureFile);
+    assert.equal(w.build("s").css, "own{}\n.y{}");
+    assert.equal(w.css, "top{}\n.y{}");
   } finally { m.cleanup(); }
 });
