@@ -17,6 +17,7 @@
  * installs keep working until they're upgraded.
  */
 import { WebSocketServer } from "ws";
+import { timingSafeEqual } from "crypto";
 import { WS_PORT, WS_HOST, WS_HOST_IS_LOOPBACK, WS_ALLOWED_ORIGINS, HELLO_DEADLINE_MS, HEARTBEAT_INTERVAL_MS, WS_TOKEN, WS_TOKEN_NOTICES, SERVER_VERSION, SERVER_ROOT, PROTOCOL_VERSION } from "./config.js";
 import { codedError } from "./errors.js";
 import { log }                        from "./log.js";
@@ -158,6 +159,19 @@ export function describeUnauthedHello(msg = {}) {
 }
 
 /**
+ * Constant-time token comparison. A length mismatch rejects up front, which
+ * leaks only the length; timingSafeEqual needs equal-length buffers anyway.
+ *
+ * @param {unknown} sent     the token as it arrived
+ * @param {string}  expected the configured token
+ */
+export function tokenMatches(sent, expected) {
+  if (typeof sent !== "string" || typeof expected !== "string") return false;
+  const a = Buffer.from(sent), b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
  * Why a hello frame's token was rejected, in operator-actionable terms.
  *
  * Split out from the reject path because three failures that are identical
@@ -291,7 +305,7 @@ export function startBridgeServer() {
         const t = pendingHello.get(socket);
         if (t) { clearTimeout(t); pendingHello.delete(socket); }
 
-        if (tokenRequired && msg.token !== WS_TOKEN) {
+        if (tokenRequired && !tokenMatches(msg.token, WS_TOKEN)) {
           log(`Bridge hello rejected from ${describeUnauthedHello(msg)}: ${explainTokenRejection(msg.token, WS_TOKEN)}`);
           socket.close(1008, "auth failed");
           return;
@@ -300,7 +314,7 @@ export function startBridgeServer() {
         // was never being checked — but say so once, because a stale value in
         // a world setting is exactly what breaks that world on a remote
         // client later.
-        if (WS_TOKEN && trustedLocal && msg.token && msg.token !== WS_TOKEN) {
+        if (WS_TOKEN && trustedLocal && msg.token && !tokenMatches(msg.token, WS_TOKEN)) {
           log(`Note: local bridge sent a token that does not match FOUNDRY_WS_TOKEN — ignored (local clients are not `
             + `token-checked), but this world's "MCP bridge token" setting is stale and will fail from another machine.`);
         }
