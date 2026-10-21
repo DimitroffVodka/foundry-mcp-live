@@ -91,7 +91,7 @@ export function registerWorldTools(mcp) {
     + "change to the same document, a newer modifiedTime, or a state that differs from the recorded "
     + "one); any problem refuses the whole undo and nothing is written. Updates are restored field by "
     + "field, created documents deleted, deleted ones recreated with their old id, and each step is "
-    + "read back. The undo is itself logged, so undoing it redoes. Never undone: chat messages, settings, "
+    + "read back. The undo is itself logged, so undoing it redoes; an interrupted undo resumes when run again. Never undone: chat messages, settings, macros, "
     + "users, documents over the 200k-character snapshot cap, changes made while another call was running; "
     + "never logged at all: pause, targeting, canvas view, dialogs and clicks, sounds, files, dice "
     + "already rolled, anything from another browser or before the last reload. "
