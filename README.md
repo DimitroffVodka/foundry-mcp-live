@@ -177,6 +177,15 @@ Confirm with `claude mcp list` — should show `foundry-vtt: http://127.0.0.1:30
 
 (Stdio fallback via `proxy.mjs` also works if you prefer: `claude mcp add foundry-vtt -- node /absolute/path/to/server/proxy.mjs`.)
 
+**Or install the Claude Code plugin**, which adds the same connection plus two skills (`foundry-live`: how to start a session against a live world; `foundry-test`: choosing and writing tests for a Foundry module):
+
+```
+/plugin marketplace add DimitroffVodka/foundry-mcp-live
+/plugin install foundry-mcp-live@foundry-mcp-live
+```
+
+The plugin only connects; it does not start the server, so steps 1–3 still apply. It points at `http://127.0.0.1:3000/mcp`; set `FOUNDRY_MCP_URL` before starting Claude Code to use another address, and `FOUNDRY_MCP_TOKEN` if the server has `BRIDGE_TOKEN` set. If you already added the server with `claude mcp add` at the same URL, Claude Code keeps that entry and skips the plugin's copy, so the tools are not listed twice.
+
 #### Codex CLI
 
 Edit `~/.codex/config.toml`:
@@ -267,7 +276,7 @@ Full per-platform walkthrough: **[docs/updating-the-server.md](docs/updating-the
 | `search_compendium` | Name-substring search inside one pack |
 | `get_data_model` | System schema for a document type: which `system.*` fields are real |
 | `get_settings` | Read Foundry settings |
-| `query_grid` | Per-cell spatial state — walls, occupancy, reachability |
+| `query_grid` | `mode`: cells (fog/visibility/occupancy), path (A* route), collision (walls between points), range (tokens within a distance), measure (grid distance) |
 | `get_combat` | Read-only view of the active encounter |
 | `call_module_api` | Call a function another module exposes on its `api` |
 
@@ -284,6 +293,7 @@ Full per-platform walkthrough: **[docs/updating-the-server.md](docs/updating-the
 | `scene` | `action`: create, update, activate, delete (write gate) |
 | `combat` | `action`: start, advance, end (write gate) |
 | `stage` | `action`: showJournal, shareImage, pause, pullToScene, playlist (write gate) |
+| `placeable` | `action`: create, update, delete, door — walls, lights, sounds, tiles, drawings, regions, notes (write gate) |
 | `apply_damage` | Damage with per-target outcomes, HP clamped by the system (write gate) |
 | `request` | Prompts a real player's screen and waits — `action`: roll, check, itemUse, ask (write gate) |
 
@@ -345,7 +355,7 @@ You should get a 200 with an `mcp-session-id` header.
 | `FOUNDRY_MCP_URL` | `http://127.0.0.1:3000/mcp` | Used by `proxy.mjs` to find the HTTP server |
 | `FOUNDRY_MCP_ALLOW_EVAL` | `1` | On by default. Set to `0`/`false`/`no`/`off` to drop the `evaluate` tool (arbitrary JS in Foundry context). See [SECURITY.md](SECURITY.md). |
 | `FOUNDRY_URLS` | empty | Comma-separated Foundry origins for restart-safe `bridge_status` probes, e.g. `http://localhost:30000`. |
-| `FOUNDRY_MCP_ALLOW_WRITE` | `0` | Set to `1` to enable the world-authoring tools (`actor_write`, `scene`, `stage`, `combat`, `apply_damage`, `request`) that mutate persistent world data. See [SECURITY.md](SECURITY.md). |
+| `FOUNDRY_MCP_ALLOW_WRITE` | `0` | Set to `1` to enable the world-authoring tools (`actor_write`, `scene`, `placeable`, `stage`, `combat`, `apply_damage`, `request`) that mutate persistent world data. See [SECURITY.md](SECURITY.md). |
 | `FOUNDRY_MCP_ALLOW_SELF_TEST` | `0` | Set to `1` alongside `FOUNDRY_MCP_ALLOW_WRITE=1` to register the guarded `self_test` tool. |
 | `FOUNDRY_MCP_USAGE` | `1` | Tool-usage telemetry — records each tool call to an in-memory aggregate (`GET /api/usage`) and a JSONL log. Set to `0`/`false`/`no`/`off` to disable. |
 | `FOUNDRY_MCP_USAGE_LOG` | `server/usage-telemetry.jsonl` | Path for the per-call JSONL usage log. The log may contain truncated arg previews and `evaluate` bodies, so keep it local. |
@@ -450,7 +460,7 @@ to be running, since the bridge is what is under test.
 
 ## Releasing a new version
 
-1. Bump `version` in [module/module.json](module/module.json) and [server/package.json](server/package.json), and refresh both root `version` fields in `server/package-lock.json` (top level and `packages[""]`). `server.js` needs no edit — `SERVER_VERSION` is read from `package.json` at startup. Move the `## [Unreleased]` entries in [CHANGELOG.md](CHANGELOG.md) under a dated `## [x.y.z]` heading.
+1. Bump `version` in [module/module.json](module/module.json), [server/package.json](server/package.json) and the Claude Code plugin's [plugin.json](plugins/foundry-mcp-live/.claude-plugin/plugin.json) (CI fails if the three disagree), and refresh both root `version` fields in `server/package-lock.json` (top level and `packages[""]`). `server.js` needs no edit — `SERVER_VERSION` is read from `package.json` at startup. Move the `## [Unreleased]` entries in [CHANGELOG.md](CHANGELOG.md) under a dated `## [x.y.z]` heading.
 2. Commit, then tag and push: `git tag v1.0.1 && git push --tags`. A tag with a pre-release suffix (`v1.1.0-beta.1`) publishes as a GitHub pre-release and stays out of `releases/latest`, so it never offers itself as an update to stable installs — which also means nobody gets it unless they install its versioned manifest by hand.
 3. The [release workflow](.github/workflows/release.yml) builds `module.zip` and publishes a GitHub Release with `module.json` + `module.zip` attached. The manifest URL `releases/latest/download/module.json` then points at the new version automatically, so Foundry's update check picks it up.
 

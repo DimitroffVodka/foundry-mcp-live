@@ -36,17 +36,18 @@ The server registers **zero resources and zero prompts**. Everything is exposed 
 
 - `list`, `document`, `snapshot` — world reads (collections, single docs, journals as Markdown, prepared actor data with `derived: true`, before/after actor state)
 - `search_compendium`, `get_settings`, `get_data_model`, `get_debug_snapshot`
-- `scene_read`, `query_grid`, `screenshot`
-- `roll` (formula or RollTable draw), `use_item`, `token` (details/move/target/create/update/delete), `apply_damage`, `request`, `combat`, `stage`
+- `scene_read`, `query_grid` (cells, plus read-only path/collision/range/measure modes), `screenshot`
+- `roll` (formula or RollTable draw), `use_item`, `token` (details/move/target/create/update/delete), `apply_damage`, `request`, `combat`, `stage`, `placeable` (walls, lights, sounds, tiles, drawings, regions, notes)
 - `get_console_errors`, `bridge_status`, `reload_foundry`, `trace`, `evaluate`
+- `changes` — the change log of every document a write call touched, with undo by entry, call, or latest call
 - `list_connected_bridges` — use this first to confirm Foundry is connected
 
 ## How the tools are organized
 
-The server currently exposes ~32 tools (plus three design-harness tools — `render_fixture`, `preview_fixture` and `write_variant` — that register only when a harness exists on the server host; see `server/TOOLS.md`). **Do not assume one tool per verb** — many related operations are merged behind a single tool that takes an `action` discriminator. Read the tool's own schema; the `action` enum lists the valid modes for that tool.
+The server currently exposes ~33 tools (plus three design-harness tools — `render_fixture`, `preview_fixture` and `write_variant` — that register only when a harness exists on the server host; see `server/TOOLS.md`). **Do not assume one tool per verb** — many related operations are merged behind a single tool that takes an `action` discriminator. Read the tool's own schema; the `action` enum lists the valid modes for that tool.
 
 - **Actors:** `actor_write` (create/update/delete actors and create-from-compendium).
-- **World content:** `scene` (create/update/activate/delete scenes) and `combat` (start/advance/end encounters) — each merged tool takes an `action` param, not separate `create_*`/`update_*`/`delete_*` verbs.
+- **World content:** `scene` (create/update/activate/delete scenes), `placeable` (create/update/delete walls, lights, sounds, tiles, drawings, regions and notes; set door states) and `combat` (start/advance/end encounters) — each merged tool takes an `action` param, not separate `create_*`/`update_*`/`delete_*` verbs.
 - **Tokens:** `token` — one tool, `action` param: move (straight or wall-aware A\* with `pathed: true`), create, update, delete, toggleCondition, target, setLevel.
 - **Player-facing requests:** `request` — action roll (dialog, waits for a human click) / check (system-native check, dialogs suppressed) / itemUse (attack→damage workflow) / ask (a question with button choices or free text). See Mutation caution.
 - **Live play:** `stage` — showJournal / shareImage / pause / pullToScene / playlist. `roll` with a table param draws from a RollTable. `chat` action 'events' reads a seq-numbered event cursor (chat, rolls, ask answers) and 'wait' blocks for the next matching message (max 40 s; MCP clients give up near 60 s).
@@ -82,6 +83,17 @@ approval_mode = "approve"
 
 Restart Codex after editing. The server should appear in the MCP list with tools loaded. The status line `Auth: Unsupported` is **normal** for local unauthenticated use — it only matters if `BRIDGE_TOKEN` is set on the server (see below).
 
+## Claude Code plugin
+
+Claude Code users can install the connection and the Foundry skills in one step instead of configuring the server by hand:
+
+```
+/plugin marketplace add DimitroffVodka/foundry-mcp-live
+/plugin install foundry-mcp-live@foundry-mcp-live
+```
+
+The plugin (`plugins/foundry-mcp-live/`) only points at a running server; it never starts one. Its `.mcp.json` uses `FOUNDRY_MCP_URL` (default `http://127.0.0.1:3000/mcp`) and sends `FOUNDRY_MCP_TOKEN` as the bearer token when set. Its `foundry-live` skill is the first-message protocol above. Keep `plugin.json`'s version equal to `module/module.json`; CI checks it.
+
 ## Prerequisites for connection
 
 1. MCP server is running: `cd server && npm start` (or `server\start.bat` on Windows). Default port 3000.
@@ -103,9 +115,9 @@ Some tools change live Foundry state — they alter what GMs and players see in 
 
 There are **three independent gates** on mutation, all of which must allow the call:
 
-1. **Server env gate.** World-authoring tools (`actor_write`, `combat`, `scene`, `stage`, `apply_damage`, `request`, `self_test`) are registered only when `FOUNDRY_MCP_ALLOW_WRITE=1`; `chat` action 'send' requires the same gate at call time (read/events/wait are always available). `token` actions (move/create/update/delete/toggleCondition/target/setLevel) and `interact` are always registered — the per-world read-only toggle (gate 2) is what keeps a closed world safe. If a write tool isn't in your tool list, the gate is off **by design** — tell the user to set the env var rather than retrying. `evaluate` / `job_result` are registered by default and disappear only under `FOUNDRY_MCP_ALLOW_EVAL=0`.
-2. **Per-world read-only toggle.** The GM can flip a module setting, **"Allow AI to modify the world"** (default on), to make the bridge read-only without restarting the server. When it's off, every mutating tool refuses at the server's audit chokepoint even though the tool is still listed. If a mutation is rejected for this reason, tell the user to re-enable the setting — don't retry.
-3. **No undo on deletes.** Foundry has no undo for delete actions (`scene`/`actor_write` with `action: "delete"`, `token` action 'delete', …). Confirm the target with a read first; there is no recovery.
+1. **Server env gate.** World-authoring tools (`actor_write`, `combat`, `scene`, `placeable`, `stage`, `apply_damage`, `request`, `self_test`) are registered only when `FOUNDRY_MCP_ALLOW_WRITE=1`; `chat` action 'send' requires the same gate at call time (read/events/wait are always available). `token` actions (move/create/update/delete/toggleCondition/target/setLevel) and `interact` are always registered — the per-world read-only toggle (gate 2) is what keeps a closed world safe. If a write tool isn't in your tool list, the gate is off **by design** — tell the user to set the env var rather than retrying. `evaluate` / `job_result` are registered by default and disappear only under `FOUNDRY_MCP_ALLOW_EVAL=0`.
+2. **Per-world read-only toggle.** The GM can flip a module setting, **"Allow AI to modify the world"** (default on), to make the bridge read-only without restarting the server. When it's off — or unreadable, or holding anything but true — every handler declared write or delete access (in `module/lib/handler-access.js`, which includes chat, rolls, `evaluate` and `call_module_api`) is refused by the bridge's single dispatcher, even though the tool is still listed; the refusal names the setting. If a mutation is rejected for this reason, tell the user to re-enable the setting — don't retry.
+3. **Deletes are only as recoverable as the change log.** Foundry has no undo for delete actions (`scene`/`actor_write`/`placeable` with `action: "delete"`, `token` action 'delete', …; `placeable` delete takes `dryRun: true` to preview). `changes` (action "undo") can recreate what a call deleted, from the routed browser tab's log (on a GM tab it survives a reload; 200 entries, oldest dropped first). Confirm the target with a read first anyway.
 
 The `request` tool pops a dialog on the **target user's** screen for its roll action and waits for a human to click. If you target a player without an active browser, the dialog never shows and the call times out — target a user you know is connected, or use `autoAccept` for unattended/test runs.
 

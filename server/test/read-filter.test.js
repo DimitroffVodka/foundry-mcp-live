@@ -123,7 +123,7 @@ test("bridge.js: every routed document read goes through readAs / removeSecrets"
     return src.slice(start, src.indexOf("\n  },\n", start));
   };
   for (const h of ["get_actor", "get_item", "get_compendium_document", "search_compendium", "get_data_model",
-    "get_token_details", "snapshot_actors", "get_scene_placeables", "get_actor_items", "get_selected_token"]) {
+    "get_token_details", "snapshot_actors", "get_scene_placeables", "get_actor_items", "get_selected_token", "changes_list"]) {
     assert.match(body(h), /readAs\(/, h);
   }
   for (const h of ["get_data_model", "get_token_details", "get_actor_items"]) assert.match(body(h), /readAs\(\w+, \{ system: /, h);

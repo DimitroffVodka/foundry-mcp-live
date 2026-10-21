@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "foundry-vtt": {
+      "type": "http",
+      "url": "${FOUNDRY_MCP_URL:-http://127.0.0.1:3000/mcp}",
+      "headers": {
+        "Authorization": "Bearer ${FOUNDRY_MCP_TOKEN:-}"
+      }
+    }
+  }
+}
