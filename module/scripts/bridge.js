@@ -16,6 +16,7 @@ import {
 } from "../lib/audit.js";
 import { flushCanvasRender } from "./canvas-render.js";
 import { designPreview } from "./design-preview.js";
+import { derivedView, getJournal, listJournals } from "./journal-read.js";
 import { createRuntimeJobStore } from "./runtime-jobs.js";
 import {
   applySceneLevelUpdate,
@@ -1354,7 +1355,7 @@ const handlers = {
       ? game.actors.get(params.id)
       : game.actors.getName(params.name);
     if (!actor) return { error: `Actor not found: ${params.id || params.name}` };
-    return actor.toObject();
+    return params.derived ? derivedView(actor) : actor.toObject();
   },
 
   /** Currently selected token's actor */
@@ -1450,7 +1451,7 @@ const handlers = {
     }
 
     if (!doc) return { error: `Document not found in ${params.pack}` };
-    return doc.toObject();
+    return params.derived ? derivedView(doc) : doc.toObject();
   },
 
   /** List items (world-level) */
@@ -1473,7 +1474,7 @@ const handlers = {
       ? game.items.get(params.id)
       : game.items.getName(params.name);
     if (!item) return { error: `Item not found: ${params.id || params.name}` };
-    return item.toObject();
+    return params.derived ? derivedView(item) : item.toObject();
   },
 
   /** Active Effects on a given actor */
@@ -1564,19 +1565,11 @@ const handlers = {
     return { error: "No template or sample data found" };
   },
 
-  /** List journal entries */
-  list_journals: (params = {}) => {
-    let journals = game.journal.contents;
-    if (params.folder) {
-      journals = journals.filter(j => j.folder?.name === params.folder);
-    }
-    return journals.map(j => ({
-      id: j.id,
-      name: j.name,
-      folder: j.folder?.name ?? null,
-      pages: j.pages.contents.map(p => ({ id: p.id, name: p.name, type: p.type }))
-    }));
-  },
+  /** List / search journal entries (paginated) */
+  list_journals: listJournals,
+
+  /** One journal entry's pages as Markdown (paginated, optionally enriched) */
+  get_journal: getJournal,
 
   /** List roll tables */
   list_tables: () => {

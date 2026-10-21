@@ -261,8 +261,8 @@ Full per-platform walkthrough: **[docs/updating-the-server.md](docs/updating-the
 
 | Tool | Description |
 |------|-------------|
-| `list` | List a collection — `type`: actor, scene, module, rollTable, compendium |
-| `document` | Read one document — `action`: actor, item, compendium, actorItems |
+| `list` | List a collection — `type`: actor, scene, module, rollTable, compendium, journal (with text search) |
+| `document` | Read one document — `action`: actor, item, compendium, actorItems, journal (pages as Markdown); `derived: true` for prepared sheet values |
 | `scene_read` | The active scene — `action`: summary, placeables |
 | `search_compendium` | Name-substring search inside one pack |
 | `get_data_model` | System schema for a document type: which `system.*` fields are real |

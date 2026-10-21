@@ -34,7 +34,7 @@ Common failure mode for fresh agents: looking for MCP **resources** (`resources/
 
 The server registers **zero resources and zero prompts**. Everything is exposed as MCP **tools**. Call tools by name. `tools/list` is the live source of truth; `server/TOOLS.md` is the detailed reference. A few staples to orient with:
 
-- `list`, `document`, `snapshot` — world reads (collections, single docs, before/after actor state)
+- `list`, `document`, `snapshot` — world reads (collections, single docs, journals as Markdown, prepared actor data with `derived: true`, before/after actor state)
 - `search_compendium`, `get_settings`, `get_data_model`, `get_debug_snapshot`
 - `scene_read`, `query_grid`, `screenshot`
 - `roll`, `use_item`, `token` (details/move/target/create/update/delete), `apply_damage`, `request`, `combat`
