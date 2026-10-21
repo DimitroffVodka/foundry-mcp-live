@@ -4,8 +4,8 @@
  * module API bridge.
  *
  * Merged surfaces (2026-08-19 reduction):
- *   - `list`     — list_actors / list_scenes / list_modules / list_tables / list_compendiums
- *   - `document` — get_actor / get_item / get_compendium_document / get_actor_items
+ *   - `list`     — list_actors / list_scenes / list_modules / list_tables / list_compendiums / list_journals
+ *   - `document` — get_actor / get_item / get_compendium_document / get_actor_items / get_journal
  *   - `chat`     — send_chat_message / get_chat_messages (send is write-gated at call time)
  */
 import { z }                                                       from "zod";
@@ -28,15 +28,21 @@ export function registerWorldTools(mcp) {
     + "scene (every scene as {id,name,active,folder}), "
     + "module (installed modules; `activeOnly` default true), "
     + "rollTable (tables with formulas and result counts), "
-    + "compendium (packs with metadata; optional document-type `filter`).",
+    + "compendium (packs with metadata; optional document-type `filter`), "
+    + "journal (entries with their pages; `query` searches entry names and page text and returns snippets; "
+    + "paginated {total, offset, count, items, truncated} — read a page with document action 'journal').",
     {
-      type:       z.enum(["actor", "scene", "module", "rollTable", "compendium"]).describe("Collection to list."),
+      type:       z.enum(["actor", "scene", "module", "rollTable", "compendium", "journal"]).describe("Collection to list."),
       filter:     z.string().optional().describe("[actor] Actor subtype (e.g. 'character', 'npc'). [compendium] Document type (e.g. 'Actor', 'Item')."),
-      folder:     z.string().optional().describe("[actor] Filter by folder name."),
+      folder:     z.string().optional().describe("[actor/journal] Filter by folder name."),
       activeOnly: z.boolean().optional().describe("[module] Include inactive modules if false. Default true."),
+      query:      z.string().optional().describe("[journal] Case-insensitive text to find in entry names, page names and page text."),
+      secrets:    z.boolean().optional().describe("[journal] Also search GM secret blocks. Default false."),
+      offset:     z.number().int().min(0).optional().describe("[journal] Skip this many entries. Default 0."),
+      limit:      z.number().int().min(1).max(500).optional().describe("[journal] Max entries per call. Default 50."),
     },
     { actor: "list_actors", scene: "list_scenes", module: "list_modules",
-      rollTable: "list_tables", compendium: "list_compendiums" },
+      rollTable: "list_tables", compendium: "list_compendiums", journal: "list_journals" },
     "type",
     {});
 
@@ -47,16 +53,29 @@ export function registerWorldTools(mcp) {
     + "item — full world item by `id` or `name`; "
     + "compendium — one document from a pack (`pack` + `id`/`name`); "
     + "actorItems — focused {id,name,type,img,system} list of an actor's embedded items "
-    + "(`actorId`; optional item-type `filter`) — much smaller than a full actor read.",
+    + "(`actorId`; optional item-type `filter`) — much smaller than a full actor read; "
+    + "journal — a journal entry's pages as Markdown (`id`/`name`, optional `pack`, `page`), paginated "
+    + "{total, offset, count, items, truncated}; `enrich` resolves @UUID links and inline rolls first. "
+    + "`derived: true` on actor/item/compendium returns the PREPARED values the sheet shows "
+    + "(toObject(false).system, appliedEffects, getRollData()) instead of the stored source.",
     {
-      action:  z.enum(["actor", "item", "compendium", "actorItems"]).describe("Document kind."),
-      id:      z.string().optional().describe("[actor/item/compendium] Document ID."),
-      name:    z.string().optional().describe("[actor/item/compendium] Exact name (case-insensitive for compendium)."),
-      pack:    z.string().optional().describe("[compendium] Pack ID (e.g. 'vagabond.monsters')."),
-      actorId: z.string().optional().describe("[actorItems] Actor document id or exact name."),
-      filter:  z.string().optional().describe("[actorItems] Item type filter (e.g. 'weapon', 'spell')."),
+      action:     z.enum(["actor", "item", "compendium", "actorItems", "journal"]).describe("Document kind."),
+      id:         z.string().optional().describe("[actor/item/compendium/journal] Document ID."),
+      name:       z.string().optional().describe("[actor/item/compendium/journal] Exact name (case-insensitive in a compendium)."),
+      pack:       z.string().optional().describe("[compendium/journal] Pack ID (e.g. 'vagabond.monsters'). [journal] read the entry from this pack instead of the world."),
+      actorId:    z.string().optional().describe("[actorItems] Actor document id or exact name."),
+      filter:     z.string().optional().describe("[actorItems] Item type filter (e.g. 'weapon', 'spell')."),
+      derived:    z.boolean().optional().describe("[actor/item/compendium] Return prepared data: {system: toObject(false).system, appliedEffects, rollData: getRollData()}. rollData carries non-schema derived values (e.g. dnd5e abilities.*.mod). Default false (stored source)."),
+      page:       z.string().optional().describe("[journal] Read only this page (id or exact name)."),
+      offset:     z.number().int().min(0).optional().describe("[journal] Skip this many pages. Default 0."),
+      limit:      z.number().int().min(1).max(100).optional().describe("[journal] Max pages per call. Default 20."),
+      maxChars:   z.number().int().min(500).max(200000).optional().describe("[journal] Character budget for the reply's Markdown. Default 20000. Overflow is reported in the truncated/note fields."),
+      textOffset: z.number().int().min(0).optional().describe("[journal] With `page`: start at this character of the page's Markdown (to continue a cut page)."),
+      enrich:     z.boolean().optional().describe("[journal] Run page HTML through TextEditor.enrichHTML first (resolves @UUID links, inline rolls, system enrichers). Default false."),
+      secrets:    z.boolean().optional().describe("[journal] Include GM secret blocks. Default false."),
     },
-    { actor: "get_actor", item: "get_item", compendium: "get_compendium_document", actorItems: "get_actor_items" },
+    { actor: "get_actor", item: "get_item", compendium: "get_compendium_document", actorItems: "get_actor_items",
+      journal: "get_journal" },
     "action",
     { compendium: ["pack"], actorItems: ["actorId"] });
 

@@ -63,7 +63,8 @@ Foundry core update.
 Note: several former dedicated write tools (folders, journals, regions, scene
 levels, actor items/ownership, measured templates) were removed in the
 2026-08 reduction; those operations are now done via `evaluate` against the
-same document APIs this table describes.
+same document APIs this table describes. Journal *reads* are back on the merged
+tools: `list` type `"journal"` and `document` action `"journal"`.
 
 ---
 
@@ -179,31 +180,39 @@ the tool can never double-launch a browser.
 ### `list`
 List world collections. The `type` discriminator picks the collection.
 
-- **Discriminator**: `type` — `"actor"`, `"scene"`, `"module"`, `"rollTable"`, or `"compendium"` (required).
+- **Discriminator**: `type` — `"actor"`, `"scene"`, `"module"`, `"rollTable"`, `"compendium"`, or `"journal"` (required).
 - **Params**:
   - `filter?` **[actor]** — actor subtype (e.g. `"character"`, `"npc"`). **[compendium]** — document type (e.g. `"Actor"`, `"Item"`).
-  - `folder?` **[actor]** — filter by sidebar folder name (exact match).
+  - `folder?` **[actor/journal]** — filter by sidebar folder name (exact match).
   - `activeOnly?` **[module]** — default `true`; `false` includes inactive modules.
+  - `query?` **[journal]** — case-insensitive search of entry names, page names and page text (the page Markdown, see `document` action `"journal"`).
+  - `secrets?` **[journal]** — also search GM secret blocks. Default `false`.
+  - `offset?` / `limit?` **[journal]** — pagination; `limit` default 50, max 500.
 - **Returns**:
   - `actor`: `[{ id, name, type, folder, img }]`
   - `scene`: `[{ id, name, active, folder }]`
   - `module`: `[{ id, title, version, active }]`
   - `rollTable`: `[{ id, name, formula, results }]` (`results` is the entry count; there's no table-rolling tool — use `evaluate` with `game.tables.get(id).draw()`.)
   - `compendium`: `[{ id, label, type, system, count }]` — `id` is the collection path (e.g. `"vagabond.monsters"`); use it as `pack` in `search_compendium` / `document`.
+  - `journal`: `{ total, offset, count, items, truncated, nextOffset?, note? }`. Without `query`, items are `{ id, name, folder, pages: [{ id, name, type }] }`; with `query`, `{ id, name, folder, matches: [{ pageId, pageName, snippet? }] }` (an entry whose name matches is listed even with no page match). `truncated: true` means more entries exist beyond this call; `note` says which `offset` to use next. Only entries/pages the routed user can see are listed.
 
 ### `document`
 Read one document. The `action` discriminator picks the kind.
 
-- **Discriminator**: `action` — `"actor"`, `"item"`, `"compendium"`, or `"actorItems"`.
+- **Discriminator**: `action` — `"actor"`, `"item"`, `"compendium"`, `"actorItems"`, or `"journal"`.
 - **Params**:
-  - `id?` / `name?` **[actor/item]** — one of them (exact name match).
+  - `id?` / `name?` **[actor/item/journal]** — one of them (exact name match).
   - `pack` **[compendium, required]**, `id?` / `name?` **[compendium]** — fetch one entry from a pack.
   - `actorId` **[actorItems, required]** — actor id or exact name; `filter?` — item type (e.g. `"weapon"`).
+  - `derived?` **[actor/item/compendium]** — return the prepared values instead of the stored source (see Returns). Default `false`.
+  - **[journal]** `pack?` — read the entry from a compendium instead of the world; `page?` — one page by id or exact name; `offset?` / `limit?` — page pagination (`limit` default 20, max 100); `maxChars?` — Markdown budget for the reply (default 20000, max 200000); `textOffset?` — with `page`, start at this character (continue a cut page); `enrich?` — run the HTML through `TextEditor.enrichHTML` first; `secrets?` — include GM secret blocks (default `false`, in both modes).
 - **Returns**:
   - `actor` — full `actor.toObject()`: `_id, name, type, img, system, items, effects, prototypeToken, folder, sort, ownership, flags`. **Heavy.**
   - `item` — `item.toObject()`.
   - `compendium` — full `toObject()` of the entry (or `{ error: "Document not found in <pack>" }`).
+  - with `derived: true` (actor/item/compendium) — `{ id, uuid, name, type, img, system, appliedEffects?, rollData }`: `system` is `toObject(false).system` (schema fields after `prepareData` and Active Effects — e.g. a buffed `hp.max`), `appliedEffects` is `[{ id, name, origin, statuses, changes }]` (actors only), `rollData` is `getRollData()`, which also carries derived values the schema does not hold (dnd5e `abilities.*.mod`, `prof`). This is what the sheet shows; the source read is what is stored. Nested documents become their uuid and cycles become `"[Circular]"`.
   - `actorItems` — `[{ id, name, type, img, system }]` — much smaller than a full actor read.
+  - `journal` — `{ id, uuid, name, folder, total, offset, count, items, truncated, nextOffset?, note? }`; items are `{ id, name, type, chars, markdown, textOffset?, cut? }`. Text pages are converted HTML → Markdown in the browser by walking the parsed DOM (headings, lists, tables, links, images; secret blocks dropped unless `secrets`); image/video/pdf pages become a Markdown image or link. Without `enrich`, links stay as written (`@UUID[...]{...}`); with it, enriched links come back as `@UUID[uuid]{label}` and inline rolls/system enrichers as their rendered text. `truncated: true` whenever anything was left out; `note` says how to continue (`offset=…`, or `page` + `textOffset` when a single page was cut at `maxChars`; `chars` is the page's full length).
 
 ### `search_compendium`
 Name-substring search within one pack. Loads the index on demand.

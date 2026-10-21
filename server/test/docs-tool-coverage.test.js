@@ -67,3 +67,34 @@ test("TOOLS.md has no section for a tool that no longer exists", () => {
     `Remove the stale section, or add it to NON_TOOL_HEADINGS if it documents a param/concept rather than a tool.`
   );
 });
+
+// Merged tools hide their modes behind a discriminator enum (`action`, `type`).
+// A new mode added to the zod enum but not to the tool's TOOLS.md section is
+// invisible to anyone reading the reference, so every value must appear there.
+for (const gate of ["EVAL", "WRITE", "SELF_TEST"]) process.env[`FOUNDRY_MCP_ALLOW_${gate}`] = "1";
+const { registerTools } = await import("../tools/index.js");
+const CAPTURED = [];
+await registerTools({ tool: (name, description, schema) => { CAPTURED.push({ name, schema }); return {}; } });
+const unwrapOptional = (t) => { while (t?._def?.innerType) t = t._def.innerType; return t; };
+
+function toolSection(md, name) {
+  const start = md.search(new RegExp("^### `" + name + "`", "m"));
+  if (start < 0) return "";
+  const rest = md.slice(start + 4);
+  const end = rest.search(/^#{2,3} /m);
+  return end < 0 ? rest : rest.slice(0, end);
+}
+
+test("every discriminator value of a merged tool is named in its TOOLS.md section", () => {
+  assert.ok(CAPTURED.length >= 30, `captured only ${CAPTURED.length} tools — the registerTools capture is broken`);
+  const missing = [];
+  for (const { name, schema } of CAPTURED) {
+    for (const key of ["action", "type"]) {
+      const values = unwrapOptional(schema?.[key])?.options;
+      if (!Array.isArray(values)) continue;
+      const section = toolSection(TOOLS_MD, name);
+      for (const v of values.filter((x) => typeof x === "string")) if (!section.includes(`"${v}"`) && !section.includes(`'${v}'`) && !section.includes(`\`${v}\``)) missing.push(`${name}.${key}=${v}`);
+    }
+  }
+  assert.deepEqual(missing, [], `TOOLS.md does not mention: ${missing.join(", ")}`);
+});
