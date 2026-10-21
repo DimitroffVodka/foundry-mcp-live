@@ -7,12 +7,13 @@ import { RELAY_TOOLS, findStoredCode } from "../../module/lib/relay-guard.js";
 const root = new URL("../../", import.meta.url);
 const read = (p) => readFileSync(new URL(p, root), "utf8");
 
-// Keys of the `const handlers = { ... }` table in bridge.js (two-space indent).
+// Keys of the `const handlers = { ... }` table in bridge.js (two-space indent),
+// including shorthand entries like `stage,`.
 function bridgeHandlerNames() {
   const src = read("module/scripts/bridge.js");
   const start = src.indexOf("const handlers = {");
   const end = src.indexOf("\n};", start);
-  return new Set([...src.slice(start, end).matchAll(/^  ([a-z_]+): /gm)].map(m => m[1]));
+  return new Set([...src.slice(start, end).matchAll(/^  ([a-z_]+)(?:: |,$)/gm)].map(m => m[1]));
 }
 
 // Every quoted lower_snake literal in the server's tools and lib: the bridge

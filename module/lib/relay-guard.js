@@ -25,6 +25,8 @@ export const RELAY_TOOLS = new Set([
   "request_item_use", "apply_damage", "get_scene_placeables", "get_settings",
   "get_actor_items", "set_canvas_level", "update_scene", "activate_scene", "list_scenes",
   "create_scene", "delete_scene", "call_module_api", "query_grid",
+  "list_journals", "get_journal", "draw_table", "stage", "events_read", "events_wait",
+  "request_ask",
 ]);
 
 const MAX_DEPTH = 64;
