@@ -14,8 +14,11 @@ import {
   safeSerializeHookArg,
   extractDocRef
 } from "../lib/audit.js";
+import { relayRefusal } from "../lib/relay-guard.js";
 import { flushCanvasRender } from "./canvas-render.js";
 import { designPreview } from "./design-preview.js";
+import { derivedView, getJournal, listJournals } from "./journal-read.js";
+import { createEventLog, chatEvent, escapeHtml, eventMatcher, requestAsk, stage, waitDialog } from "./live-play.js";
 import { createRuntimeJobStore } from "./runtime-jobs.js";
 import {
   applySceneLevelUpdate,
@@ -57,6 +60,10 @@ function requireSceneLevels(toolName) {
 const RECONNECT_DELAY = 5000;
 const MAX_ERRORS = 1000;
 const evaluationJobs = createRuntimeJobStore();
+const eventLog = createEventLog();
+Hooks.on("createChatMessage", (msg) => {
+  try { eventLog.record(chatEvent(msg)); } catch (err) { console.warn(`${MODULE_ID} | event log: ${err.message}`); }
+});
 
 // Wire-protocol version the module speaks. Must match the server's
 // PROTOCOL_VERSION (server/lib/config.js). Bump both together only on a
@@ -1354,7 +1361,7 @@ const handlers = {
       ? game.actors.get(params.id)
       : game.actors.getName(params.name);
     if (!actor) return { error: `Actor not found: ${params.id || params.name}` };
-    return actor.toObject();
+    return params.derived ? derivedView(actor) : actor.toObject();
   },
 
   /** Currently selected token's actor */
@@ -1450,7 +1457,7 @@ const handlers = {
     }
 
     if (!doc) return { error: `Document not found in ${params.pack}` };
-    return doc.toObject();
+    return params.derived ? derivedView(doc) : doc.toObject();
   },
 
   /** List items (world-level) */
@@ -1473,7 +1480,7 @@ const handlers = {
       ? game.items.get(params.id)
       : game.items.getName(params.name);
     if (!item) return { error: `Item not found: ${params.id || params.name}` };
-    return item.toObject();
+    return params.derived ? derivedView(item) : item.toObject();
   },
 
   /** Active Effects on a given actor */
@@ -1564,19 +1571,11 @@ const handlers = {
     return { error: "No template or sample data found" };
   },
 
-  /** List journal entries */
-  list_journals: (params = {}) => {
-    let journals = game.journal.contents;
-    if (params.folder) {
-      journals = journals.filter(j => j.folder?.name === params.folder);
-    }
-    return journals.map(j => ({
-      id: j.id,
-      name: j.name,
-      folder: j.folder?.name ?? null,
-      pages: j.pages.contents.map(p => ({ id: p.id, name: p.name, type: p.type }))
-    }));
-  },
+  /** List / search journal entries (paginated) */
+  list_journals: listJournals,
+
+  /** One journal entry's pages as Markdown (paginated, optionally enriched) */
+  get_journal: getJournal,
 
   /** List roll tables */
   list_tables: () => {
@@ -2039,6 +2038,48 @@ const handlers = {
       return { error: err.message, stack: err.stack };
     }
   },
+
+  /**
+   * Draw from a RollTable with the native RollTable#draw: nested tables,
+   * replacement (drawn flags) and the chat card come from Foundry itself.
+   * `rig` forces the table roll's dice like the `roll` handler.
+   */
+  draw_table: async (params = {}) => {
+    return runAuditedMutation("draw_table", params, capturePlans.none, async () => {
+      const { table: ref, rig, displayChat = true, reset = false } = params;
+      if (!ref) throw new Error("`table` (id, exact name or UUID) is required.");
+      const table = (String(ref).includes(".") ? await fromUuid(ref) : null)
+        ?? game.tables.get(ref) ?? game.tables.getName(ref);
+      if (table?.documentName !== "RollTable") throw new Error(`RollTable "${ref}" not found.`);
+      if (reset) await table.resetResults();
+      const { roll, results } = await withRiggedDice(rig, () => table.draw({ displayChat }));
+      const strip = (h) => String(h ?? "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+      return {
+        table: { id: table.id, name: table.name, uuid: table.uuid },
+        roll: roll ? { formula: roll.formula, total: roll.total } : null,
+        results: results.map(r => ({
+          id: r.id, name: r.name ?? r.text, description: strip(r.description) || undefined,
+          type: r.type, documentUuid: r.documentUuid ?? undefined, img: r.img,
+          ...(r.parent && r.parent !== table ? { fromTable: r.parent.name } : {}),
+        })),
+        remaining: table.replacement ? null : table.results.filter(r => !r.drawn).length,
+        ...(results.length ? {} : { note: "No result: no range covers the roll, or every result is drawn "
+          + "(replacement off) — pass reset:true to put them back." }),
+      };
+    });
+  },
+
+  /** Chat/roll/ask events since a cursor. See live-play.js createEventLog. */
+  events_read: (params = {}) => eventLog.read({
+    sinceSeq: params.sinceSeq, limit: Math.min(params.limit ?? 50, 300), match: eventMatcher(params) }),
+
+  /** Block until the next matching event (or one already after sinceSeq). */
+  events_wait: (params = {}) => eventLog.wait({
+    sinceSeq: params.sinceSeq, timeoutMs: (params.timeoutSeconds ?? 30) * 1000, match: eventMatcher(params) }),
+
+  request_ask: (params = {}) => requestAsk(params, eventLog),
+
+  stage,
 
   /**
    * Trigger an item on an actor (weapon, spell, feature) and capture the
@@ -3406,59 +3447,34 @@ const handlers = {
         };
       }
 
-      const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c =>
-        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-
-      return new Promise((resolve) => {
-        let resolved = false;
-        let dialog;
-
-        const finalize = (result) => {
-          if (resolved) return;
-          resolved = true;
-          clearTimeout(timer);
-          try { dialog?.close(); } catch {}
-          resolve(result);
-        };
-
-        const timer = setTimeout(() => finalize({ mode: "timed_out", formula }), timeoutSeconds * 1000);
-
-        dialog = new Dialog({
-          title: label ? `Roll Request: ${label}` : "Roll Request",
-          content: `<div style="padding: 8px;">
+      const r = await waitDialog({
+        window: { title: label ? `Roll Request: ${label}` : "Roll Request" },
+        content: `<div style="padding: 8px;">
               <p>${escapeHtml(prompt)}</p>
               <p><strong>Roll:</strong> <code>${escapeHtml(formula)}</code></p>
             </div>`,
-          buttons: {
-            roll: {
-              label: "Roll",
-              callback: async () => {
-                try {
-                  const roll = await new Roll(formula).evaluate();
-                  const msg = await roll.toMessage({ speaker: ChatMessage.getSpeaker(), flavor: label ?? prompt });
-                  finalize({
-                    mode: "rolled",
-                    formula,
-                    total: roll.total,
-                    result: roll.result,
-                    dice: roll.dice.map(d => ({ faces: d.faces, results: d.results.map(x => x.result) })),
-                    messages: [msg.id] // for the capturePlan.after
-                  });
-                } catch (err) {
-                  finalize({ mode: "error", formula, error: err.message });
-                }
-              }
-            },
-            cancel: {
-              label: "Cancel",
-              callback: () => finalize({ mode: "cancelled", formula })
+        buttons: [
+          { action: "roll", label: "Roll", default: true, callback: async () => {
+            try {
+              const roll = await new Roll(formula).evaluate();
+              const msg = await roll.toMessage({ speaker: ChatMessage.getSpeaker(), flavor: label ?? prompt });
+              return {
+                mode: "rolled",
+                formula,
+                total: roll.total,
+                result: roll.result,
+                dice: roll.dice.map(d => ({ faces: d.faces, results: d.results.map(x => x.result) })),
+                messages: [msg.id] // for the capturePlan.after
+              };
+            } catch (err) {
+              return { mode: "error", formula, error: err.message };
             }
-          },
-          default: "roll",
-          close: () => finalize({ mode: "dismissed", formula })
-        });
-        dialog.render(true);
-      });
+          } },
+          { action: "cancel", label: "Cancel", callback: () => ({ mode: "cancelled", formula }) },
+        ],
+      }, timeoutSeconds);
+      if (r.status === "answered") return r.value;
+      return { mode: r.status === "timeout" ? "timed_out" : "dismissed", formula };
     });
   },
 
@@ -4874,7 +4890,9 @@ Hooks.once("init", () => {
   game.settings.register(MODULE_ID, "relayAllowEvaluate", {
     name: "Allow `evaluate` over the relay",
     hint: "Off by default. When off, remote clients refuse relayed `evaluate` calls even "
-        + "if the MCP server has evaluation enabled. Only turn this on if you trust every "
+        + "if the MCP server has evaluation enabled, and relayed writes that would store a "
+        + "script (Region script/macro behaviors, script macros, Monk's Active Tiles actions, "
+        + "Mass Edit spawn scripts, Item Piles macros). Only turn this on if you trust every "
         + "GM-capable user in this world.",
     scope: "world",
     config: true,
@@ -4973,16 +4991,9 @@ Hooks.once("ready", () => {
  * performed.
  */
 async function dispatchRelayTool(tool, params) {
-  const handler = handlers[tool];
-  if (!handler) throw new Error(`Unknown tool: ${tool}`);
-
-  if (tool === "evaluate" && !game.settings.get(MODULE_ID, "relayAllowEvaluate")) {
-    throw new Error(
-      "`evaluate` is not permitted over the relay in this world. Enable "
-      + '"Allow `evaluate` over the relay" in the module settings to change that.'
-    );
-  }
-  return handler(params ?? {});
+  const refusal = relayRefusal(tool, params, game.settings.get(MODULE_ID, "relayAllowEvaluate"));
+  if (refusal) throw new Error(refusal);
+  return handlers[tool](params ?? {});
 }
 
 // Gateway control surface. Driven from Node over CDP — deliberately not a

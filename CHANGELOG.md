@@ -4,6 +4,43 @@ All notable changes to Foundry MCP Live are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Journals without `evaluate`.** `list {type:"journal"}` lists entries and
+  searches page text; `document {action:"journal"}` returns an entry's pages as
+  Markdown, paginated, with a `maxChars` cap that says where to resume. The
+  HTML is converted in the browser by walking the DOM. `enrich: true` resolves
+  `@UUID` links and inline rolls first. Secrets come back only to a page's owners.
+- **Prepared sheet data.** `derived: true` on `document` actor, item and
+  compendium reads returns what the sheet shows (`toObject(false)`,
+  `getRollData()`, applied effects) instead of the stored source.
+- **Live-play surface.** `roll {table}` draws with Foundry's own
+  `RollTable#draw`. A new write-gated `stage` tool shows a journal or image to
+  players, pauses, pulls players to a scene and controls playlists (31 → 32
+  tools). `request {action:"ask"}` puts a question on a player's screen.
+  `chat {action:"events"|"wait"}` reads an always-on, sequence-numbered event
+  log, for "ask, then wait for the answer" loops.
+
+### Changed
+
+- `request_roll` uses DialogV2 instead of the deprecated v1 `Dialog`.
+
+### Security
+
+- **The relay refuses writes that store code** (Region script behaviors,
+  script macros, Monk's Active Tiles actions, Mass Edit / Item Piles / Item
+  Macro / DAE / Effect Macro scripts) while "Allow `evaluate` over the relay"
+  is off. Such code runs later in someone's browser, so it is `evaluate` by
+  another route. The relay also dispatches only handlers a server tool routes
+  to (`RELAY_TOOLS`).
+- **`trace`'s `trigger` fires only those same handlers** and honours the
+  write, eval and self-test env gates. Before, it could reach leftover handlers
+  and get around `FOUNDRY_MCP_ALLOW_WRITE`.
+- **MCP sessions expire** after 30 minutes idle, capped at 64. An unknown
+  session id gets a 404, so clients re-initialize after a restart instead of
+  failing.
+- Bearer and bridge tokens are compared in constant time.
+
 ## [1.0.0] - 2026-09-21
 
 First stable release. The version jumps 0.19.0-beta.3 → 1.0.0 rather than

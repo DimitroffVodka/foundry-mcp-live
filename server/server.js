@@ -35,7 +35,8 @@ import { log }                            from "./lib/log.js";
 import { HTTP_PORT, BRIDGE_TOKEN, ALLOW_EVAL, SERVER_VERSION, RELAUNCH_CONFIG, RELAY_CONFIG } from "./lib/config.js";
 import { createRelayGateway }            from "./lib/relay-gateway.js";
 import { setRelayGateway }               from "./lib/relay-runtime.js";
-import { startBridgeServer, bridges }     from "./lib/bridges.js";
+import { startBridgeServer, bridges, tokenMatches } from "./lib/bridges.js";
+import { sessionsToEvict }               from "./lib/sessions.js";
 import { startHotReloadWatcher }          from "./lib/hot-reload.js";
 import { registerTools }                  from "./tools/index.js";
 import { relaunchClient }                 from "./lib/relaunch.js";
@@ -80,10 +81,22 @@ if (RELAY_CONFIG.enabled) {
 // ---------------------------------------------------------------------------
 // HTTP / MCP server — stateful session management so multiple clients work
 // ---------------------------------------------------------------------------
-// Each session: { transport, mcp }. The hot-reload watcher iterates `mcp`
+// Each session: { transport, mcp, lastActive }. Idle or over-cap sessions are closed
+// (lib/sessions.js). The hot-reload watcher iterates `mcp`
 // values to upsert tool registrations across every active session on a
 // tools/*.js change.
-const sessions = new Map(); // sessionId → { transport, mcp }
+const sessions = new Map(); // sessionId → { transport, mcp, lastActive }
+
+function closeSessions(ids, why) {
+  for (const id of ids) {
+    const s = sessions.get(id);
+    if (!s) continue;
+    sessions.delete(id);
+    s.transport.close().catch(() => {});
+    log(`Session evicted [${id}]  (${why}; ${sessions.size} active)`);
+  }
+}
+setInterval(() => closeSessions(sessionsToEvict(sessions), "idle"), 60_000).unref();
 
 // Hot-reload: file watcher on tools/ that re-imports and re-registers tools
 // across every active session whenever a tool file changes. See
@@ -122,11 +135,13 @@ app.use((req, res, next) => {
 
 // Optional token auth. When BRIDGE_TOKEN is unset, behave as before
 // (localhost trust). When set, require `Authorization: Bearer <token>`.
+function bearerOk(req) {
+  const m = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? "");
+  return !!m && tokenMatches(m[1], BRIDGE_TOKEN);
+}
 if (BRIDGE_TOKEN) {
   app.use("/mcp", (req, res, next) => {
-    const auth = req.headers.authorization ?? "";
-    const m = /^Bearer\s+(.+)$/i.exec(auth);
-    if (!m || m[1] !== BRIDGE_TOKEN) {
+    if (!bearerOk(req)) {
       res.status(401).json({ error: "Invalid or missing bearer token", code: "FML-0004" });
       return;
     }
@@ -147,13 +162,9 @@ log(isUsageTelemetryEnabled()
 // Aggregate-only (no args / eval bodies — those stay in the JSONL log on disk).
 // Gated behind the same bearer token as /mcp when one is configured.
 app.get("/api/usage", (req, res) => {
-  if (BRIDGE_TOKEN) {
-    const auth = req.headers.authorization ?? "";
-    const m = /^Bearer\s+(.+)$/i.exec(auth);
-    if (!m || m[1] !== BRIDGE_TOKEN) {
-      res.status(401).json({ error: "Invalid or missing bearer token", code: "FML-0004" });
-      return;
-    }
+  if (BRIDGE_TOKEN && !bearerOk(req)) {
+    res.status(401).json({ error: "Invalid or missing bearer token", code: "FML-0004" });
+    return;
   }
   res.json(getUsageSnapshot());
 });
@@ -164,8 +175,15 @@ app.all("/mcp", async (req, res) => {
 
   // --- Existing session ---
   if (sessionId && sessions.has(sessionId)) {
-    const { transport } = sessions.get(sessionId);
-    await transport.handleRequest(req, res, req.body);
+    const session = sessions.get(sessionId);
+    session.lastActive = Date.now();
+    await session.transport.handleRequest(req, res, req.body);
+    return;
+  }
+
+  // --- Unknown/evicted session: 404 tells a spec client to re-initialize ---
+  if (sessionId) {
+    res.status(404).json({ jsonrpc: "2.0", error: { code: -32001, message: "Session not found" }, id: null });
     return;
   }
 
@@ -179,7 +197,8 @@ app.all("/mcp", async (req, res) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (id) => {
-      sessions.set(id, { transport, mcp });
+      closeSessions(sessionsToEvict(sessions, { room: 1 }), "session cap");
+      sessions.set(id, { transport, mcp, lastActive: Date.now() });
       log(`Session opened  [${id}]  (${sessions.size} active)`);
     },
   });
