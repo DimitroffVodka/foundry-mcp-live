@@ -34,6 +34,12 @@ All notable changes to Foundry MCP Live are documented in this file.
   5M characters, oldest pruned first, written at most once a second). The store
   is never logged itself and never shown by `list` or `document`; players'
   browsers still receive it, as they do every journal.
+- **Module content fingerprint.** `module/scripts/build-info.js` carries a
+  SHA-256 of `module/` (`scripts/stamp-module.mjs`, checked in CI). The module
+  sends it in its hello; `bridge_status` and `list_connected_bridges` report
+  `moduleStale` with both hashes when an install differs from the server's
+  `module/`, and the GM gets a toast. `scripts/deploy-module.mjs <dir> [--dev]`
+  deploys from a staged copy and verifies the target by hash.
 
 ### Changed
 

@@ -89,6 +89,7 @@ export async function diagnoseBridgeStatus({
       worldId: b.worldId || null,
       systemId: b.systemId || null,
       foundryVersion: b.foundryVersion || null,
+      ...b.fingerprint,
       connectedAt: b.connectedAt ? new Date(b.connectedAt).toISOString() : null,
     }));
 
@@ -103,6 +104,7 @@ export async function diagnoseBridgeStatus({
       worldId: b.worldId || null,
       systemId: b.systemId || null,
       foundryVersion: b.foundryVersion || null,
+      ...b.fingerprint,
       connectedAt: b.connectedAt ? new Date(b.connectedAt).toISOString() : null,
       disconnectedAt: b.disconnectedAt ? new Date(b.disconnectedAt).toISOString() : null,
     }));
