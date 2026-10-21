@@ -14,6 +14,7 @@ import { registerRoutedTool, registerRawTool, registerMergedTool,
 import { ALLOW_WRITE }                                             from "../lib/config.js";
 import { codedMessage }                                            from "../lib/errors.js";
 import { callFoundry }                                             from "../lib/foundry-rpc.js";
+import { WRITE_GATED_HANDLERS }                                    from "./tracing.js";
 
 export function registerWorldTools(mcp) {
   // --- Game info ---
@@ -78,6 +79,38 @@ export function registerWorldTools(mcp) {
       journal: "get_journal" },
     "action",
     { compendium: ["pack"], actorItems: ["actorId"] });
+
+  // --- Change log (list reads; undo writes, and only what the env gates allowed to be done) ---
+  registerRawTool(mcp, "changes",
+    "The change log of the routed Foundry client: every document a write call created, updated or "
+    + "deleted (last 200, kept in that browser's memory until it reloads), with before/after source. "
+    + "action 'list' — newest first: id, callId, tool, action, documentName, uuid, name, changed paths, "
+    + "undoable/reason. Filter by callId or uuid; pass entryId for one entry with its full before/after. "
+    + "action 'undo' — reverse one entry (entryId), every change of one call (callId), or, with neither, "
+    + "the latest call. Every step is checked first (undoable at all, permission, and drift: a later "
+    + "change to the same document, a newer modifiedTime, or a state that differs from the recorded "
+    + "one); any problem refuses the whole undo and nothing is written. Updates are restored field by "
+    + "field, created documents deleted, deleted ones recreated with their old id, and each step is "
+    + "read back. The undo is itself logged, so undoing it redoes. Never undone: chat messages, settings, "
+    + "users, documents over the 200k-character snapshot cap, changes made while another call was running; "
+    + "never logged at all: pause, targeting, canvas view, dialogs and clicks, sounds, files, dice "
+    + "already rolled, anything from another browser or before the last reload. "
+    + "Undo respects the read-only world toggle, and changes from FOUNDRY_MCP_ALLOW_WRITE tools need that gate on.",
+    {
+      action:     z.enum(["list", "undo"]).describe("Change-log operation."),
+      entryId:    z.string().optional().describe("[list] Return this entry with its before/after. [undo] Undo only this entry."),
+      callId:     z.string().optional().describe("[list] Only this call's entries. [undo] Undo this whole call."),
+      uuid:       z.string().optional().describe("[list] Only entries for this document uuid."),
+      limit:      z.number().int().min(1).max(200).optional().describe("[list] Max entries. Default 50."),
+      targetUser: z.string().optional().describe(TARGET_USER_DESC),
+    },
+    async (params) => {
+      const { action, targetUser, ...rest } = params;
+      if (action === "list") return callFoundry("changes_list", rest, targetUser);
+      const { entryId, callId } = rest;
+      return callFoundry("changes_undo",
+        { entryId, callId, refuseTools: ALLOW_WRITE ? [] : [...WRITE_GATED_HANDLERS] }, targetUser);
+    });
 
   // --- Chat (merged; send is write-gated) ---
   registerRawTool(mcp, "chat",

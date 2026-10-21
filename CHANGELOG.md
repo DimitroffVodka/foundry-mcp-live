@@ -21,9 +21,26 @@ All notable changes to Foundry MCP Live are documented in this file.
   `chat {action:"events"|"wait"}` reads an always-on, sequence-numbered event
   log, for "ask, then wait for the answer" loops.
 
+- **Change log with undo.** Every document a write call creates, updates or
+  deletes is logged in the bridge browser (last 200 entries, before/after
+  source, 200k-character cap per snapshot). A new `changes` tool lists the log
+  and undoes one entry, one whole call, or the latest call: every step is
+  checked for drift and permission first and any problem refuses the whole
+  undo; updates are restored field by field, creates deleted, deletes
+  recreated with their old id, each step read back. The undo is logged too, so
+  undoing it redoes. (32 → 33 tools)
+
 ### Changed
 
 - `request_roll` uses DialogV2 instead of the deprecated v1 `Dialog`.
+- **The read-only toggle is enforced in one place.** Every bridge handler
+  declares `read`, `write` or `delete` access; the dispatcher refuses
+  undeclared handlers and refuses write/delete ones unless "Allow AI to modify
+  the world" is exactly on. It used to live inside the audit wrapper, so a
+  handler that did not wrap itself skipped it, and an unreadable setting let
+  writes through. Now covered as well: `roll` (it posts to chat), `request`
+  ask, `interact`, `evaluate`, `call_module_api` and `set_canvas_level`. The
+  setting still defaults to on.
 
 ### Security
 

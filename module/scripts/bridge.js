@@ -15,6 +15,8 @@ import {
   extractDocRef
 } from "../lib/audit.js";
 import { relayRefusal } from "../lib/relay-guard.js";
+import { accessRefusal, HANDLER_ACCESS, MUTATION_SETTING } from "../lib/handler-access.js";
+import { createChangeLog, describeEntry, OUTSIDE_THE_LOG, undo as undoChanges } from "../lib/change-log.js";
 import { flushCanvasRender } from "./canvas-render.js";
 import { designPreview } from "./design-preview.js";
 import { derivedView, getJournal, listJournals } from "./journal-read.js";
@@ -63,6 +65,58 @@ const evaluationJobs = createRuntimeJobStore();
 const eventLog = createEventLog();
 Hooks.on("createChatMessage", (msg) => {
   try { eventLog.record(chatEvent(msg)); } catch (err) { console.warn(`${MODULE_ID} | event log: ${err.message}`); }
+});
+
+// ---------------------------------------------------------------------------
+// Change log — every document a write call creates, updates or deletes, with
+// before/after source, so `changes` can list and undo it (lib/change-log.js).
+// pre* hooks run only in the browser that asked for the change; that is where
+// the call is tagged. The tag rides in the operation options to the post
+// hooks, which fire in every browser, so only this page's tags are recorded.
+// ---------------------------------------------------------------------------
+const changeLog = createChangeLog();
+const CLIENT_TAG = foundry.utils.randomID();
+const pendingBefore = new Map(); // `${callId} ${uuid}` -> source before an update/delete
+
+function tagOperation(options) {
+  const call = changeLog.attribute();
+  if (call) options.mcpChange = { ...call, client: CLIENT_TAG };
+  return call;
+}
+
+function recordChange(action, doc, options, before, after) {
+  const call = options?.mcpChange;
+  if (call?.client !== CLIENT_TAG) return;
+  try {
+    changeLog.record({
+      ...call, action, before, after,
+      documentName: doc.documentName, uuid: doc.uuid, name: doc.name ?? null,
+      parentUuid: doc.parent?.uuid ?? null, pack: doc.pack ?? null,
+      embedded: Object.values(doc.constructor?.metadata?.embedded ?? {}),
+    });
+  } catch (err) { console.warn(`${MODULE_ID} | change log: ${err.message}`); }
+}
+
+Hooks.once("init", () => {
+  const types = CONST.ALL_DOCUMENT_TYPES ?? Object.keys(CONFIG).filter(k => CONFIG[k]?.documentClass);
+  for (const name of types) {
+    Hooks.on(`preCreate${name}`, (doc, data, options) => { tagOperation(options); });
+    Hooks.on(`create${name}`, (doc, options) => recordChange("create", doc, options, null, doc.toObject()));
+    for (const action of ["update", "delete"]) {
+      const cap = action[0].toUpperCase() + action.slice(1);
+      Hooks.on(`pre${cap}${name}`, (doc, ...rest) => {
+        const call = tagOperation(action === "update" ? rest[1] : rest[0]);
+        if (call) pendingBefore.set(`${call.callId} ${doc.uuid}`, doc.toObject());
+      });
+      Hooks.on(`${action}${name}`, (doc, ...rest) => {
+        const options = action === "update" ? rest[1] : rest[0];
+        const key = `${options?.mcpChange?.callId} ${doc.uuid}`;
+        const before = pendingBefore.get(key) ?? null;
+        pendingBefore.delete(key);
+        recordChange(action, doc, options, before, action === "update" ? doc.toObject() : null);
+      });
+    }
+  }
 });
 
 // Wire-protocol version the module speaks. Must match the server's
@@ -4535,8 +4589,57 @@ const handlers = {
     });
 
     return { sceneId: scene.id, gridSize, fogExploration, cellCount: cells.length, cells };
-  }
+  },
+
+  /** This browser's change log, newest first; snapshots only for a single entryId. */
+  changes_list: (params = {}) => {
+    let list = changeLog.entries;
+    if (params.entryId) list = list.filter(e => e.id === params.entryId);
+    if (params.callId) list = list.filter(e => e.callId === params.callId);
+    if (params.uuid) list = list.filter(e => e.uuid === params.uuid);
+    return {
+      total: changeLog.entries.length,
+      entries: list.slice(-Math.min(params.limit ?? 50, 200)).reverse()
+        .map(e => describeEntry(e, !!params.entryId)),
+      neverLogged: OUTSIDE_THE_LOG,
+    };
+  },
+
+  /** Undo one entry, one call, or the latest call. All checks pass first or nothing is written. */
+  changes_undo: async (params = {}, { callId } = {}) => undoChanges(changeLog, changeLog.select(params), {
+    callId,
+    refuseTools: params.refuseTools,
+    current: async (uuid) => (await fromUuid(uuid))?.toObject() ?? null,
+    permission: undoPermission,
+    apply: applyUndoStep,
+  }),
 };
+
+async function undoPermission(step) {
+  try {
+    const doc = step.op === "create"
+      ? new CONFIG[step.documentName].documentClass(step.data, {
+        parent: step.parentUuid ? await fromUuid(step.parentUuid) : null, pack: step.pack })
+      : await fromUuid(step.uuid);
+    if (doc?.canUserModify(game.user, step.op)) return null;
+    return `${game.user.name} may not ${step.op} this ${step.documentName}`;
+  } catch (err) {
+    return `could not check permission to ${step.op} it: ${err.message}`;
+  }
+}
+
+async function applyUndoStep(step) {
+  if (step.op === "create") {
+    const parent = step.parentUuid ? await fromUuid(step.parentUuid) : null;
+    await CONFIG[step.documentName].documentClass.create(step.data,
+      { ...(parent ? { parent } : { pack: step.pack }), keepId: true });
+    return;
+  }
+  const doc = await fromUuid(step.uuid);
+  if (!doc) throw new Error("document not found");
+  if (step.op === "delete") await doc.delete();
+  else await doc.update(step.update);
+}
 
 // ---------------------------------------------------------------------------
 // WebSocket connection management
@@ -4732,15 +4835,8 @@ function connect() {
     }
 
     const { id, tool, params } = request;
-    const handler = handlers[tool];
-
-    if (!handler) {
-      ws.send(JSON.stringify({ id, error: `Unknown tool: ${tool}` }));
-      return;
-    }
-
     try {
-      const data = await handler(params ?? {});
+      const data = await dispatch(tool, params);
       ws.send(JSON.stringify({ id, data }));
     } catch (err) {
       console.error(`${MODULE_ID} | Handler error for ${tool}:`, err);
@@ -4824,13 +4920,14 @@ function scheduleReconnect() {
 // Settings — GM-only "read-only mode" master switch
 // ---------------------------------------------------------------------------
 // World-scoped (GM-editable), default ON so existing setups are unchanged.
-// When turned OFF, every world-mutating tool refuses at the runAuditedMutation
-// chokepoint (audit.js) and the bridge becomes read-only — no server restart
+// When turned OFF, every handler declared write/delete in lib/handler-access.js
+// is refused by dispatch() and the bridge becomes read-only — no server restart
 // needed. This sits *inside* the server's env ceiling: creating/deleting
 // persistent content (the FOUNDRY_MCP_ALLOW_WRITE tools) still also requires
-// that env gate, which the AI cannot change. `evaluate` remains env-only.
+// that env gate, which the AI cannot change. `evaluate` and `call_module_api`
+// count as writes here: read-only mode means the AI changes nothing.
 Hooks.once("init", () => {
-  game.settings.register(MODULE_ID, "allowWorldMutations", {
+  game.settings.register(MODULE_ID, MUTATION_SETTING, {
     name: "Allow AI to modify the world",
     hint: "When on, the AI may change actors, tokens, combat, scenes, and chat. "
         + "Turn off to make the bridge read-only without restarting the server. "
@@ -4993,7 +5090,27 @@ Hooks.once("ready", () => {
 async function dispatchRelayTool(tool, params) {
   const refusal = relayRefusal(tool, params, game.settings.get(MODULE_ID, "relayAllowEvaluate"));
   if (refusal) throw new Error(refusal);
-  return handlers[tool](params ?? {});
+  return dispatch(tool, params);
+}
+
+/**
+ * The one way a tool call reaches a handler, direct or relayed. Every handler
+ * declares its access in lib/handler-access.js; undeclared ones never run, and
+ * write/delete ones need "Allow AI to modify the world" on. Write calls are
+ * open in the change log while they run, so their document changes are logged.
+ */
+async function dispatch(tool, params) {
+  const refused = accessRefusal(tool, () => game.settings.get(MODULE_ID, MUTATION_SETTING));
+  if (refused) throw new Error(refused);
+  if (HANDLER_ACCESS[tool] === "read") return handlers[tool](params ?? {});
+  const callId = `${CLIENT_TAG}-${foundry.utils.randomID(8)}`;
+  changeLog.begin(callId, tool);
+  try {
+    return await handlers[tool](params ?? {}, { callId });
+  } finally {
+    changeLog.end(callId);
+    for (const key of pendingBefore.keys()) if (key.startsWith(`${callId} `)) pendingBefore.delete(key);
+  }
 }
 
 // Gateway control surface. Driven from Node over CDP — deliberately not a

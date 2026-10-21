@@ -30,9 +30,13 @@ Every tool that modifies the Foundry world (creates, updates, or deletes documen
 - **`audit.before`** — snapshot of the affected document(s) *before* the change.
 - **`audit.after`** — snapshot *after* the change.
 - **`audit.diff`** — structured delta of what actually changed. Noisy metadata (timestamps, stats, IDs) is automatically filtered.
-- **`audit.undo`** — dry instructions for how to revert the change (e.g. rollback data or a delete command).
+- **`audit.undo`** — dry instructions for how to revert the change (e.g. rollback data or a delete command). To actually revert it, use [`changes`](#changes): every write call is logged there whether or not `audit` was set.
 
 **Efficiency Note:** Full snapshots are limited to 10 documents per call to keep context window usage low. If more are affected, the audit will note the truncation. Use this to self-verify your work in an **Act -> Validate** loop.
+
+### Read-only toggle
+
+Every bridge handler declares its access — `read`, `write` or `delete` — in `module/lib/handler-access.js`, and the bridge's single dispatcher checks it before any handler runs, on the direct and the relay path alike. A handler with no declaration is refused as unknown (a test fails when one is missing). `write` and `delete` handlers run only while the world setting **"Allow AI to modify the world"** (`foundry-mcp-live.allowWorldMutations`, default on) is exactly `true`; when it is off, unreadable, or holds anything else, they are refused with a message naming that setting. `write` includes everything that can change the world or other people's screens: chat, rolls posted to chat, dialogs, UI clicks, `evaluate` and `call_module_api`.
 
 The server-local tools are `list_connected_bridges`, `bridge_status`,
 `reload_foundry`, and the opt-in `relaunch_client`. They inspect or
@@ -328,6 +332,20 @@ Chat log access. The `action` discriminator selects the operation.
 - **`action: "events"`** — the live event cursor (not gated). Every client keeps a ring buffer of its last 300 events, recorded from `createChatMessage` (kind `"chat"`, or `"roll"` when the message carries rolls) plus `request {action:"ask"}` answers shown on that client (kind `"ask"`). Each event has a monotonic `seq`. Params: `sinceSeq?` (only events after it), `limit?` (newest kept, default 50, max 300), filters `kind?`, `user?` (author name/id), `speaker?` (alias/actor id), `contains?` (case-insensitive text/flavor substring). Returns `{ latestSeq, events: [{ seq, at, kind, messageId, user, userId, speaker, actorId, flavor?, content, rolls?, whisper }], dropped?, reset? }`. `dropped` means the cursor fell off the ring; `reset` means the client reloaded (seq restarted) and the read started from the beginning. Whispers the routed client can see are included and flagged. Unlike `trace`, it is always recording, so nothing between two calls is missed.
 - **`action: "wait"`** — block until the next event matching the same filters, or return at once if one is already buffered after `sinceSeq` (omit `sinceSeq` to wait for a new one only). `timeoutSeconds?` default 30, **max 40**: MCP clients give up near 60 s, so wait in rounds. Returns `{ status: "matched", latestSeq, event }` or `{ status: "timeout", latestSeq }`. A reply that lands after a timeout is still in the buffer — read it with `events`.
 - **Pattern — ask the table and wait for a reply**: `chat {action:"events", limit:1}` → keep `latestSeq` → post the question (`chat send`) → `chat {action:"wait", sinceSeq, user:"Alice"}`; on timeout call `wait` again with the same `sinceSeq`.
+
+---
+
+## Change log
+
+### `changes`
+The routed client's log of every document a write call created, updated or deleted, with undo. Always registered; `undo` writes, so it respects the read-only toggle.
+
+- **Discriminator**: `action` — `"list"` or `"undo"`.
+- **What is logged**: while a handler declared `write`/`delete` runs (see [Read-only toggle](#read-only-toggle)), each document create/update/delete that browser asks for is one entry `{ id, callId, tool, time, action, documentName, uuid, name, parentUuid, pack, changed, undoable, reason, undoneBy? }` with the document source before and after. The last 200 entries are kept in that browser's memory: a reload empties the log, and each bridge client has its own.
+- **`action: "list"`** — newest first. Params: `callId?`, `uuid?`, `limit?` (default 50, max 200); `entryId?` returns that one entry with its full `before`/`after`. Returns `{ total, entries, neverLogged }`.
+- **`action: "undo"`** — `entryId` undoes one entry, `callId` every entry of one call, neither the latest call. Before writing anything every step is checked: the entry is undoable; the user may do the reverse action, and changes made by `FOUNDRY_MCP_ALLOW_WRITE` tools need that gate on now; no drift — no later entry on the same document, `_stats.modifiedTime` unchanged, and the document still equal to the recorded `after`. Any problem refuses the whole undo: `{ ok: false, problems, wouldRun }`, nothing written. Otherwise each document goes back to its state before the earliest selected entry: updates are restored field by field (old values set, added keys removed with `-=`; embedded collections are their own entries), created documents are deleted, deleted ones recreated with `keepId`, newest first, and each step is read back: `{ ok: true, undoCallId, applied: [{ op, uuid, entries, fields?, readBack }] }`. The undo is itself a logged call, so undoing it redoes.
+- **Never undone**: chat messages, settings, users, documents over the 200,000-character snapshot cap, and changes made while another write call was running on the same client (which call made them is uncertain). **Never logged**: pause, targeting, canvas view and level, dialogs and clicks on other screens, sounds, uploaded files, dice already rolled, `evaluate` jobs that finish after their call returns, changes from another browser, and anything before the client last loaded the world.
+- A human editing in the bridge's own browser while a long call runs (for example `request` waiting for a player) is logged under that call; check `list` before undoing a call that waited on people.
 
 ---
 

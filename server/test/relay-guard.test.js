@@ -118,6 +118,6 @@ test("dispatchRelayTool throws relayRefusal's verdict before calling a handler",
   const body = src.slice(start, src.indexOf("\n}", start));
   const check = body.search(/const refusal = relayRefusal\(tool, params, /);
   const thrown = body.indexOf("if (refusal) throw new Error(refusal);");
-  const call = body.indexOf("handlers[tool](");
+  const call = body.indexOf("dispatch(tool, params)");
   assert.ok(check >= 0 && thrown > check && call > thrown, `dispatchRelayTool must check relayRefusal first:\n${body}`);
 });

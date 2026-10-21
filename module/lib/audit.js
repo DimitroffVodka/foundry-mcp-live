@@ -247,21 +247,10 @@ function buildUndo(toolName, before, after, diff) {
  * The main mutation wrapper.
  */
 export async function runAuditedMutation(toolName, params, capturePlan, executeFn) {
-  // GM "read-only mode" master switch — this is the single chokepoint every
-  // world-mutating tool flows through, so the gate lives here. When the GM has
-  // turned "Allow AI to modify the world" off, refuse before doing anything.
-  // Fails OPEN (allows) if the setting can't be read (e.g. not yet registered
-  // during init), and only blocks on an explicit `false`.
-  let mutationsAllowed = true;
-  try { mutationsAllowed = game.settings.get("foundry-mcp-live", "allowWorldMutations") !== false; }
-  catch { mutationsAllowed = true; }
-  if (!mutationsAllowed) {
-    throw new Error(
-      `World mutations are disabled by the GM — "${toolName}" was refused. `
-      + `The AI bridge is in read-only mode. A GM can re-enable it in Foundry → `
-      + `Settings → Configure Settings → Foundry MCP Live → "Allow AI to modify the world".`
-    );
-  }
+  // The "Allow AI to modify the world" gate is not here: bridge.js dispatch()
+  // enforces it for every handler from lib/handler-access.js, wrapped or not.
+  // The always-on change log (lib/change-log.js) is separate too; this block
+  // is the per-call `audit: true` view.
 
   // Audit must be opt-in; check this BEFORE any logging or work. Earlier
   // builds logged here unconditionally and spammed Foundry's console on
