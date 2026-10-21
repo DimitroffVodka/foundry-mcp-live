@@ -11,6 +11,8 @@
  *     values such as dnd5e abilities.*.mod that toObject(false) drops).
  */
 
+import { isChangeStore } from "../lib/change-log.js"; // the change log's hidden store is never listed or read
+
 const BLOCK = new Set(["P", "DIV", "SECTION", "ARTICLE", "HEADER", "FOOTER", "ASIDE",
   "FIGURE", "FIGCAPTION", "MAIN", "NAV", "DL", "DT", "DD", "DETAILS", "SUMMARY"]);
 const SKIP = new Set(["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"]);
@@ -146,7 +148,7 @@ function snippet(text, idx, len) {
 
 /** list {type:"journal"} — entries with their pages; `query` searches names and page text. */
 export async function listJournals(params = {}) {
-  let entries = game.journal.contents.filter((j) => canSee(j, "LIMITED"));
+  let entries = game.journal.contents.filter((j) => canSee(j, "LIMITED") && !isChangeStore(j));
   if (params.folder) entries = entries.filter((j) => j.folder?.name === params.folder);
   const q = params.query?.trim().toLowerCase();
   const rows = [];
@@ -187,7 +189,7 @@ async function findEntry({ id, name, pack }) {
 export async function getJournal(params = {}) {
   if (!params.id && !params.name) return { error: "journal read needs `id` or `name`." };
   const entry = await findEntry(params);
-  if (!entry || entry.documentName !== "JournalEntry" || !canSee(entry, "LIMITED")) {
+  if (!entry || entry.documentName !== "JournalEntry" || !canSee(entry, "LIMITED") || isChangeStore(entry)) {
     return { error: `Journal entry not found: ${params.id || params.name}${params.pack ? ` in ${params.pack}` : ""}` };
   }
   let pages = visiblePages(entry);

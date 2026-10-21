@@ -16,7 +16,11 @@ import {
 } from "../lib/audit.js";
 import { relayRefusal } from "../lib/relay-guard.js";
 import { accessRefusal, HANDLER_ACCESS, MUTATION_SETTING } from "../lib/handler-access.js";
-import { createChangeLog, describeEntry, OUTSIDE_THE_LOG, undo as undoChanges } from "../lib/change-log.js";
+import {
+  createChangeLog, describeEntry, isChangeStore, loadStored, OUTSIDE_THE_LOG, STORE_FLAG, STORE_OPTION, storeDelta,
+  undo as undoChanges,
+} from "../lib/change-log.js";
+import { resolveClientId } from "./relay-identity.js";
 import { flushCanvasRender } from "./canvas-render.js";
 import { designPreview } from "./design-preview.js";
 import { derivedView, getJournal, listJournals } from "./journal-read.js";
@@ -73,12 +77,20 @@ Hooks.on("createChatMessage", (msg) => {
 // pre* hooks run only in the browser that asked for the change; that is where
 // the call is tagged. The tag rides in the operation options to the post
 // hooks, which fire in every browser, so only this page's tags are recorded.
+// On a GM client the log is also kept in a hidden JournalEntry, one log per
+// tab (the relay's sessionStorage id, which survives a reload), written at
+// most once a second; lib/change-log.js "Store" has the layout.
 // ---------------------------------------------------------------------------
 const changeLog = createChangeLog();
 const CLIENT_TAG = foundry.utils.randomID();
+const TAB_ID = resolveClientId();
 const pendingBefore = new Map(); // `${callId} ${uuid}` -> source before an update/delete
+const STORE_WRITE_MS = 1000;
+let storeTimer = null;
+let storeQueue = Promise.resolve(); // one write at a time, so a slow first create cannot make a second store
 
 function tagOperation(options) {
+  if (options?.[STORE_OPTION]) return null; // the store's own writes are never logged
   const call = changeLog.attribute();
   if (call) options.mcpChange = { ...call, client: CLIENT_TAG };
   return call;
@@ -95,6 +107,54 @@ function recordChange(action, doc, options, before, after) {
       embedded: Object.values(doc.constructor?.metadata?.embedded ?? {}),
     });
   } catch (err) { console.warn(`${MODULE_ID} | change log: ${err.message}`); }
+  scheduleStoreWrite();
+}
+
+function scheduleStoreWrite() {
+  if (!game.user?.isGM || storeTimer || !changeLog.dirty.size) return;
+  storeTimer = setTimeout(() => {
+    storeTimer = null;
+    storeQueue = storeQueue.then(writeStore).catch(err => console.warn(`${MODULE_ID} | change log store: ${err.message}`));
+  }, STORE_WRITE_MS);
+}
+
+async function writeStore() {
+  const ids = [...changeLog.dirty];
+  changeLog.dirty.clear();
+  const dirty = changeLog.entries.filter(e => ids.includes(e.id));
+  if (!dirty.length) return;
+  const options = { [STORE_OPTION]: true, render: false };
+  // ponytail: two GM tabs writing their first entry at the same moment can make two stores; the first found wins.
+  const store = game.journal.find(isChangeStore);
+  const { set, drop } = storeDelta(store?.getFlag(MODULE_ID, "entries"), TAB_ID, dirty);
+  try {
+    if (!store) {
+      await JournalEntry.create({
+        name: "MCP change log (do not edit)",
+        ownership: { default: CONST.DOCUMENT_OWNERSHIP_LEVELS.NONE },
+        flags: { [MODULE_ID]: { [STORE_FLAG]: true, entries: set, seq: { [TAB_ID]: changeLog.seq } } },
+      }, options);
+      return;
+    }
+    const f = `flags.${MODULE_ID}`;
+    await store.update({
+      ...Object.fromEntries(Object.entries(set).map(([k, v]) => [`${f}.entries.${k}`, v])),
+      ...Object.fromEntries(drop.map(k => [`${f}.entries.-=${k}`, null])),
+      [`${f}.seq.${TAB_ID}`]: changeLog.seq,
+    }, options);
+  } catch (err) {
+    for (const id of ids) changeLog.dirty.add(id); // retried with the next change
+    throw err;
+  }
+}
+
+/** Put this tab's stored log back after a reload. GM only: players cannot read the store. */
+function loadStore() {
+  if (!game.user?.isGM) return;
+  try {
+    const store = game.journal.find(isChangeStore);
+    if (store) changeLog.load(loadStored(store.getFlag(MODULE_ID, "entries"), TAB_ID), store.getFlag(MODULE_ID, `seq.${TAB_ID}`) ?? 0);
+  } catch (err) { console.warn(`${MODULE_ID} | change log store: ${err.message}`); }
 }
 
 Hooks.once("init", () => {
@@ -4599,6 +4659,7 @@ const handlers = {
     if (params.uuid) list = list.filter(e => e.uuid === params.uuid);
     return {
       total: changeLog.entries.length,
+      stored: game.user.isGM ? "kept in a hidden journal; survives a reload of this tab" : "memory only (not a GM client)",
       entries: list.slice(-Math.min(params.limit ?? 50, 200)).reverse()
         .map(e => describeEntry(e, !!params.entryId)),
       neverLogged: OUTSIDE_THE_LOG,
@@ -4606,13 +4667,17 @@ const handlers = {
   },
 
   /** Undo one entry, one call, or the latest call. All checks pass first or nothing is written. */
-  changes_undo: async (params = {}, { callId } = {}) => undoChanges(changeLog, changeLog.select(params), {
-    callId,
-    refuseTools: params.refuseTools,
-    current: async (uuid) => (await fromUuid(uuid))?.toObject() ?? null,
-    permission: undoPermission,
-    apply: applyUndoStep,
-  }),
+  changes_undo: async (params = {}, { callId } = {}) => {
+    try {
+      return await undoChanges(changeLog, changeLog.select(params), {
+        callId,
+        refuseTools: params.refuseTools,
+        current: async (uuid) => (await fromUuid(uuid))?.toObject() ?? null,
+        permission: undoPermission,
+        apply: applyUndoStep,
+      });
+    } finally { scheduleStoreWrite(); } // store the undoneBy marks
+  },
 };
 
 async function undoPermission(step) {
@@ -5050,6 +5115,7 @@ Hooks.once("init", () => {
 // Foundry hook — connect once the game is ready
 // ---------------------------------------------------------------------------
 Hooks.once("ready", () => {
+  loadStore();
   // Auto-connect unless this client explicitly opted out. The dedicated headless
   // bridge (no-canvas mode) always connects regardless of the setting, so the
   // MCP tools stay available even if a GM turned auto-connect off for their own

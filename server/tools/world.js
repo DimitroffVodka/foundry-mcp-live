@@ -83,7 +83,7 @@ export function registerWorldTools(mcp) {
   // --- Change log (list reads; undo writes, and only what the env gates allowed to be done) ---
   registerRawTool(mcp, "changes",
     "The change log of the routed Foundry client: every document a write call created, updated or "
-    + "deleted (last 200, kept in that browser's memory until it reloads), with before/after source. "
+    + "deleted (last 200 per browser tab; a GM tab keeps its log across a reload), with before/after source. "
     + "action 'list' — newest first: id, callId, tool, action, documentName, uuid, name, changed paths, "
     + "undoable/reason. Filter by callId or uuid; pass entryId for one entry with its full before/after. "
     + "action 'undo' — reverse one entry (entryId), every change of one call (callId), or, with neither, "
@@ -91,10 +91,11 @@ export function registerWorldTools(mcp) {
     + "change to the same document, a newer modifiedTime, or a state that differs from the recorded "
     + "one); any problem refuses the whole undo and nothing is written. Updates are restored field by "
     + "field, created documents deleted, deleted ones recreated with their old id, and each step is "
-    + "read back. The undo is itself logged, so undoing it redoes; an interrupted undo resumes when run again. Never undone: chat messages, settings, macros, "
-    + "users, documents over the 200k-character snapshot cap, changes made while another call was running; "
+    + "read back. The undo is itself logged, so undoing it redoes; an interrupted undo resumes when run again "
+    + "with the retry ids it returns. Never undone: chat messages, settings, macros, users (undoing a whole "
+    + "call leaves them alone and lists them in leftAlone), documents over the 200k-character snapshot cap, changes made while another call was running; "
     + "never logged at all: pause, targeting, canvas view, dialogs and clicks, sounds, files, dice "
-    + "already rolled, anything from another browser or before the last reload. "
+    + "already rolled, anything from another browser tab or before the tab first loaded the world. "
     + "Undo respects the read-only world toggle, and changes from FOUNDRY_MCP_ALLOW_WRITE tools need that gate on.",
     {
       action:     z.enum(["list", "undo"]).describe("Change-log operation."),

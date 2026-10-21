@@ -215,3 +215,12 @@ test("list type 'journal' and document action 'journal' / derived route to the b
     ]);
   } finally { bridges.delete("test-gm"); }
 });
+
+test("the change log's store journal is hidden from list and document", async () => {
+  const store = entry("js", "MCP change log (do not edit)", [], { flags: { "foundry-mcp-live": { changeStore: true } } });
+  const s = stubGame({ entries: [entry("j1", "Adventure", []), store] });
+  try {
+    assert.deepEqual((await listJournals()).items.map((i) => i.id), ["j1"]);
+    assert.match((await getJournal({ id: "js" })).error, /not found/);
+  } finally { s.restore(); }
+});
