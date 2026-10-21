@@ -557,15 +557,17 @@ Author scene placeables — walls, lights, sounds, tiles, drawings, regions, map
 
 - **Discriminator**: `action` — `"create"`, `"update"`, `"delete"`, or `"door"`.
 - **`type`** — one per call: `"Wall"`, `"AmbientLight"`, `"AmbientSound"`, `"Tile"`, `"Drawing"`, `"Region"`, or `"Note"` (`door` is always Wall). `sceneId?` defaults to the active scene.
-- **`create`** — `entries` (1–200), each that document's own data, e.g. Wall `{c:[x1,y1,x2,y2]}` in pixels, Region `{name, shapes:[{type:"rectangle",x,y,width,height}], behaviors:[…]}`, AmbientLight `{x, y, config:{bright, dim}}`. Each created document gets `flags.foundry-mcp-live.createdBy = "placeable"`.
+- **`create`** — `entries` (1–200), each that document's own data, e.g. Wall `{c:[x1,y1,x2,y2]}` in pixels, Region `{name, shapes:[{type:"rectangle",x,y,width,height}], behaviors:[…]}`, AmbientLight `{x, y, config:{bright, dim}}`. Each created document gets `flags.foundry-mcp-live.createdBy = "placeable"` and `flags.foundry-mcp-live.callId`; the result returns that `callId`.
+- **Levels (v14)**: `level?` **[create]** (Level id or name) is applied to entries that have no `levels` of their own. On a scene with more than one Level, an entry with neither is refused: an empty `levels` set puts a placeable on *every* Level, which for a wall means it blocks on every floor. Pass `levels: []` on the entry when that is meant. Single-level scenes are unaffected.
 - **`update`** — `entries` (1–200), each `{_id, …fields to change}`; dotted keys (`"config.dim": 30`) work.
 - **All-or-nothing**: every entry is validated by Foundry's own data model (a throwaway construction for create, `updateSource` on a clone for update) before anything is written. One bad entry → nothing written, and the error names each bad entry by index.
 - **Read-back**: the result's `storedDifferently` lists `{index, id, field, sent, stored}` for every sent field Foundry stored differently — rounded wall coordinates, clamped volumes, and so on. Absent when everything stored as sent.
 - **Plain words on walls** (case-insensitive; CONST numbers also accepted): `door` none/door/secret, `ds` closed/open/locked, `move` none/normal, `sight`/`light`/`sound` none/limited/normal/proximity/distance, `dir` both/left/right.
-- **`delete`** — `ids` (1–200), or `createdByMcp: true` for every document of that `type` this tool created. `dryRun: true` lists what would go (`{id, label}`) and deletes nothing — use it first. Any unknown id → nothing deleted. Permanent.
+- **`delete`** — `ids` (1–200), or `createdByMcp: true` for every document of that `type` this tool created, or `callId` for exactly what one create call made. `dryRun: true` lists what would go (`{id, label}`) and deletes nothing — use it first. Any unknown id → nothing deleted. Permanent.
 - **`door`** — `ids` (door walls) + `state` `"open"`/`"closed"`/`"locked"`. A non-door wall in the list → nothing written.
 - **Relay**: over the relay, Region `executeScript`/`executeMacro` behaviors (and behavior `system.source` updates) are refused unless the world allows evaluate over the relay — the same stored-code check every relayed write gets.
-- **Returns**: `{ sceneId, type, created|updated, ids, storedDifferently? }`; delete `{ sceneId, type, deleted, documents }` (dry run `{ dryRun: true, wouldDelete, documents }`); door `{ sceneId, updated, ids, ds }`.
+- **Free text** (Note `text`, Drawing `text`, names) is stored as given; Foundry draws these as plain canvas labels and does not enrich them, so `@UUID`/`[[roll]]` syntax in them is inert.
+- **Returns**: `{ sceneId, type, callId, created, ids, storedDifferently? }` / `{ sceneId, type, updated, ids, storedDifferently? }`; delete `{ sceneId, type, deleted, documents }` (dry run `{ dryRun: true, wouldDelete, documents }`); door `{ sceneId, updated, ids, ds }`.
 - Check new walls with `query_grid {mode:"collision"}`.
 
 ### `stage`

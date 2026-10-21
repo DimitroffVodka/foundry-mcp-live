@@ -282,10 +282,13 @@ export function registerWorldAuthoringTools(mcp) {
     + "Every entry is validated by Foundry's data model first; one bad entry means nothing is written and the "
     + "error lists each bad entry. The result's storedDifferently lists fields Foundry stored differently from "
     + "what was sent (rounded coordinates, clamped values). "
+    + "On a scene with several Levels (v14) pass level (id or name) or each entry's levels; an entry with "
+    + "neither is refused, because an empty levels list puts the placeable on every Level. "
     + "Wall fields take plain words as well as CONST numbers: door none|door|secret, ds closed|open|locked, "
     + "move none|normal, sight/light/sound none|limited|normal|proximity|distance, dir both|left|right. "
     + "action 'delete' needs type + ids, or createdByMcp:true for every document of that type this tool created "
-    + "(it flags them flags.foundry-mcp-live.createdBy); call it with dryRun:true first to see what would go. "
+    + "(it flags them flags.foundry-mcp-live.createdBy), or callId (returned by create) for exactly what one "
+    + "create call made; call it with dryRun:true first to see what would go. "
     + "Permanent. "
     + "action 'door' needs ids (door walls) + state open|closed|locked. "
     + "Call scene_read action 'placeables' first to find ids, and query_grid mode 'collision' after building "
@@ -298,7 +301,9 @@ export function registerWorldAuthoringTools(mcp) {
       entries:      z.array(z.record(z.string(), z.any())).max(200).optional()
                      .describe("[create] Document data, one per placeable. [update] {_id, ...fields to change}."),
       ids:          z.array(z.string()).max(200).optional().describe("[delete/door] Document ids."),
+      level:        z.string().optional().describe("[create] Level id or name for entries without their own levels (v14 multi-level scenes)."),
       createdByMcp: z.boolean().optional().describe("[delete] Select every document of `type` this tool created instead of ids."),
+      callId:       z.string().optional().describe("[delete] Select only the documents one create call made (its result's callId)."),
       dryRun:       z.boolean().optional().describe("[delete] List what would be deleted; delete nothing."),
       state:        z.enum(["open", "closed", "locked"]).optional().describe("[door] New door state."),
       audit:        z.boolean().optional().describe(AUDIT_DESC),

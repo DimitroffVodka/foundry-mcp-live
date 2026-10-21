@@ -8,7 +8,8 @@
  *                      Foundry stored differently from what was sent is
  *                      reported (rounded coordinates, clamped values, …).
  *   delete           — by id, or every document of the type this tool created
- *                      (flags.foundry-mcp-live.createdBy); dryRun lists them.
+ *                      (flags.foundry-mcp-live.createdBy), or just one call's
+ *                      (flags.foundry-mcp-live.callId); dryRun lists them.
  *   door             — set walls' door state open/closed/locked.
  *
  * Writes go through runAuditedMutation (world read-only toggle + audit). The
@@ -86,14 +87,30 @@ function label(doc) {
   return doc.name || doc.text || (doc.c ? doc.c.join(",") : null);
 }
 
-async function create(scene, type, entries) {
+// The Level id `ref` (id or name) names, or null for none given.
+function levelId(scene, ref) {
+  if (ref === undefined) return null;
+  const level = scene.levels?.get(ref) ?? scene.levels?.getName?.(ref);
+  if (!level) throw new Error(`level "${ref}" is not a Level of scene "${scene.name}"`);
+  return level.id;
+}
+
+async function create(scene, type, entries, { level, callId }) {
   const cls = CONFIG[type].documentClass;
+  const defaultLevel = levelId(scene, level);
+  // An empty `levels` puts a placeable on every Level, so on a multi-level
+  // scene leaving it out is refused rather than silently meaning "all".
+  const levelNames = (scene.levels?.size ?? 0) > 1 ? scene.levels.map(l => l.name).join(", ") : null;
   const sent = [];
   const problems = [];
   entries.forEach((entry, i) => {
     try {
       const data = type === "Wall" ? mapWallWords(entry, CONST) : { ...entry };
       delete data._id;
+      if (!("levels" in data)) {
+        if (defaultLevel) data.levels = [defaultLevel];
+        else if (levelNames) throw new Error(`scene has Levels (${levelNames}): pass level, or levels on the entry ([] for every Level)`);
+      }
       new cls(foundry.utils.deepClone(data), { parent: scene, strict: true }); // Foundry validates (and cleans its argument in place)
       sent.push(data);
     } catch (err) {
@@ -105,12 +122,12 @@ async function create(scene, type, entries) {
   // createEmbeddedDocuments does not return them in input order.
   const ids = sent.map(() => foundry.utils.randomID());
   const flagged = sent.map((d, i) => foundry.utils.mergeObject(foundry.utils.deepClone(d),
-    { _id: ids[i], flags: { [MODULE_ID]: { createdBy: "placeable" } } }));
+    { _id: ids[i], flags: { [MODULE_ID]: { createdBy: "placeable", callId } } }));
   await scene.createEmbeddedDocuments(type, flagged, { keepId: true });
   const collection = scene.getEmbeddedCollection(type);
   const docs = ids.map(id => collection.get(id));
   const diffs = differences(sent, docs);
-  return { sceneId: scene.id, type, created: docs.length, ids: docs.map(d => d.id), ...(diffs.length && { storedDifferently: diffs }) };
+  return { sceneId: scene.id, type, callId, created: docs.length, ids: docs.map(d => d.id), ...(diffs.length && { storedDifferently: diffs }) };
 }
 
 async function update(scene, type, entries) {
@@ -137,7 +154,12 @@ async function update(scene, type, entries) {
 
 function deletionTargets(scene, type, params) {
   const collection = scene.getEmbeddedCollection(type);
-  if (params.createdByMcp) return collection.filter(d => d.flags?.[MODULE_ID]?.createdBy);
+  if (params.createdByMcp || params.callId) {
+    return collection.filter(d => {
+      const f = d.flags?.[MODULE_ID];
+      return f?.createdBy && (!params.callId || f.callId === params.callId);
+    });
+  }
   const missing = params.ids.filter(id => !collection.has(id));
   if (missing.length) throw new Error(`Nothing deleted: no ${type} with id ${missing.join(", ")} on scene "${scene.name}"`);
   return params.ids.map(id => collection.get(id));
@@ -166,7 +188,11 @@ function capturePlan(scene, type) {
   };
 }
 
-export async function placeable(params = {}) {
+/**
+ * @param {object} params  the tool params
+ * @param {{callId?: string}} [ctx]  the dispatcher's call id, when it assigns one
+ */
+export async function placeable(params = {}, ctx = {}) {
   const { action } = params;
   const type = action === "door" ? "Wall" : params.type;
   if (!PLACEABLE_TYPES.includes(type)) throw new Error(`type must be one of ${PLACEABLE_TYPES.join(", ")}`);
@@ -175,7 +201,7 @@ export async function placeable(params = {}) {
 
   const list = action === "create" || action === "update" ? params.entries : params.ids;
   const listName = action === "create" || action === "update" ? "entries" : "ids";
-  if (!(action === "delete" && params.createdByMcp)) {
+  if (!(action === "delete" && (params.createdByMcp || params.callId))) {
     if (!Array.isArray(list) || list.length === 0) throw new Error(`placeable ${action} needs a non-empty ${listName} array`);
     if (list.length > MAX_ENTRIES) throw new Error(`${list.length} ${listName}; at most ${MAX_ENTRIES} per call`);
   }
@@ -190,7 +216,8 @@ export async function placeable(params = {}) {
       return { sceneId: scene.id, type, deleted: listed.length, documents: listed };
     });
   }
-  if (action === "create") return runAuditedMutation("create_placeables", params, capturePlan(scene, type), () => create(scene, type, params.entries));
+  if (action === "create") return runAuditedMutation("create_placeables", params, capturePlan(scene, type), () => create(scene, type, params.entries, {
+    level: params.level, callId: ctx.callId ?? `placeable-${foundry.utils.randomID(8)}` }));
   if (action === "update") return runAuditedMutation("update_placeables", params, capturePlan(scene, type), () => update(scene, type, params.entries));
   if (action === "door") return runAuditedMutation("update_doors", params, capturePlan(scene, type), () => setDoors(scene, params));
   throw new Error(`Unknown placeable action "${action}"; use create|update|delete|door`);

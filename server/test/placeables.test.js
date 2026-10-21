@@ -70,13 +70,14 @@ function fakeWorld({ allowMutations = true } = {}) {
     }
   }
   let n = 0;
+  let calls = 0;
   globalThis.CONST = CONST;
   globalThis.CONFIG = { Wall: { documentClass: WallDocument }, AmbientLight: { documentClass: class {} } };
   globalThis.foundry = { utils: {
     deepClone: (v) => structuredClone(v),
     expandObject: (v) => structuredClone(v),
     mergeObject: (a, b) => ({ ...a, ...b, flags: { ...a.flags, ...b.flags } }),
-    randomID: () => `id${++n}`,
+    randomID: (len) => (len ? `c${++calls}` : `id${++n}`), // call ids ask for a length, document ids do not
   } };
   globalThis.game = {
     scenes: { get: (id) => (id === "s1" ? scene : undefined), active: scene },
@@ -99,11 +100,27 @@ test("create: flags each document, keeps ids aligned to entries, reports what Fo
   assert.deepEqual(r.ids, ["id1", "id2"], "ids follow entry order even though the create returned them reversed");
   assert.equal(writes[0].opts.keepId, true);
   assert.deepEqual(writes[0].data.map((d) => d.flags["foundry-mcp-live"].createdBy), ["placeable", "placeable"]);
+  assert.match(r.callId, /^placeable-/);
+  assert.deepEqual(writes[0].data.map((d) => d.flags["foundry-mcp-live"].callId), [r.callId, r.callId]);
   assert.equal(writes[0].data[1].door, 1, "plain word mapped before writing");
   assert.deepEqual(r.storedDifferently, [
     { index: 1, id: "id2", field: "c.0", sent: 200.4, stored: 200 },
     { index: 1, id: "id2", field: "c.2", sent: 200.4, stored: 200 },
   ]);
+});
+
+test("create: a multi-level scene needs level or levels; level names resolve; the dispatcher's callId is used", async () => {
+  const { scene, writes } = fakeWorld();
+  const levels = [{ id: "L1", name: "Cellar" }, { id: "L2", name: "Ground" }];
+  scene.levels = Object.assign(levels, { size: 2, get: (id) => levels.find((l) => l.id === id), getName: (n) => levels.find((l) => l.name === n) });
+  await assert.rejects(placeable({ action: "create", type: "Wall", entries: [{ c: [0, 0, 1, 1] }] }),
+    /\[0\] scene has Levels \(Cellar, Ground\): pass level/);
+  await assert.rejects(placeable({ action: "create", type: "Wall", level: "Attic", entries: [{ c: [0, 0, 1, 1] }] }), /level "Attic" is not a Level/);
+  assert.equal(writes.length, 0);
+  const r = await placeable({ action: "create", type: "Wall", level: "Ground", entries: [{ c: [0, 0, 1, 1] }, { c: [0, 0, 2, 2], levels: [] }] },
+    { callId: "gm-abc" });
+  assert.deepEqual(writes[0].data.map((d) => d.levels), [["L2"], []]);
+  assert.equal(r.callId, "gm-abc");
 });
 
 test("create: type, size and read-only gates", async () => {
@@ -135,6 +152,9 @@ test("delete: dryRun lists and deletes nothing; createdByMcp selects only flagge
   const dry = await placeable({ action: "delete", type: "Wall", createdByMcp: true, dryRun: true });
   assert.deepEqual(dry.documents, [{ id: "id1", label: "0,0,1,1" }]);
   assert.equal(writes.filter((w) => w.op === "delete").length, 0);
+  const second = await placeable({ action: "create", type: "Wall", entries: [{ c: [2, 2, 3, 3] }] });
+  const one = await placeable({ action: "delete", type: "Wall", callId: second.callId, dryRun: true });
+  assert.deepEqual(one.documents.map((d) => d.id), second.ids, "callId selects only that call's documents");
   await placeable({ action: "delete", type: "Wall", createdByMcp: true });
   assert.deepEqual([...coll("Wall").keys()], ["mine"]);
   await assert.rejects(placeable({ action: "delete", type: "Wall", ids: ["mine", "ghost"] }), /Nothing deleted: no Wall with id ghost/);
