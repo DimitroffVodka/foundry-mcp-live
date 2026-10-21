@@ -60,6 +60,14 @@ Copy or symlink the `module/` folder from this repo into your Foundry modules di
 - **Linux:** `/home/foundry/foundrydata/Data/modules/foundry-mcp-live`
 - **macOS:** `~/Library/Application Support/FoundryVTT/Data/modules/foundry-mcp-live`
 
+Or let the deploy script do it from a clean staged copy (it refuses to write into a directory that isn't empty or an existing install of this module, and verifies the result by hash):
+
+```bash
+node scripts/deploy-module.mjs /path/to/Data/modules/foundry-mcp-live --dev
+```
+
+`--dev` strips the manifest and download URLs from module.json and adds a `-dev.<timestamp>` version suffix, so Foundry's updater leaves that copy alone and the module list shows which copy is live. After changing anything under `module/`, run `node scripts/stamp-module.mjs` and commit `module/scripts/build-info.js`; CI fails when it is stale. `bridge_status` and `list_connected_bridges` report `moduleStale: true` for a client whose files differ from the server's `module/`.
+
 </details>
 
 ### 3. Start the MCP server

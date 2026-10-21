@@ -405,6 +405,7 @@ export function registerServerLocalTools(mcp) {
           userName:    b.userName,
           host:        b.host || "",
           isGM:        b.isGM,
+          ...b.fingerprint,
           connectedAt: new Date(b.connectedAt).toISOString(),
         }))
         .sort((a, b) => {
@@ -451,6 +452,11 @@ export function registerServerLocalTools(mcp) {
         }
       } catch { /* gateway down or mid-restart; direct bridges still listed */ }
 
+      if (list.some(b => b.moduleStale)) {
+        result.moduleStaleNote = "moduleStale: that client's module files differ from the server's module/ "
+          + "(stale or hand-patched install). Redeploy with scripts/deploy-module.mjs and reload Foundry.";
+      }
+
       if (bridges.has("__legacy__")) {
         result.legacyBridgeConnected = true;
         result.note = "A pre-multi-user bridge is connected and is being treated as the default GM. "
@@ -463,7 +469,8 @@ export function registerServerLocalTools(mcp) {
     "Diagnose the MCP-to-Foundry connection without requiring a live bridge. "
     + "Reports connected and last-seen bridges, probes known Foundry /api/status "
     + "endpoints, and classifies the state as bridge-connected, "
-    + "foundry-up-no-bridge, foundry-up-no-users, foundry-down, or unknown.",
+    + "foundry-up-no-bridge, foundry-up-no-users, foundry-down, or unknown. "
+    + "A bridge whose module files differ from the server's module/ shows moduleStale: true plus both hashes.",
     {},
     async () => {
       const result = await getBridgeDiagnosis();

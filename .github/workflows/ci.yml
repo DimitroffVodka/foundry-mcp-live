@@ -45,6 +45,11 @@ jobs:
             node --check "$f" || exit 1
           done
 
+      # build-info.js carries a hash of module/ that the server compares with
+      # each bridge's, so a stale stamp in git would mark every install stale.
+      - name: Module content stamp is current
+        run: node scripts/stamp-module.mjs --check
+
       - name: Manifest is valid JSON and matches the server version
         run: |
           MODULE_VERSION=$(jq -r .version module/module.json)

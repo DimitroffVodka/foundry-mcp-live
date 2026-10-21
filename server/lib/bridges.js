@@ -18,7 +18,8 @@
  */
 import { WebSocketServer } from "ws";
 import { timingSafeEqual } from "crypto";
-import { WS_PORT, WS_HOST, WS_HOST_IS_LOOPBACK, WS_ALLOWED_ORIGINS, HELLO_DEADLINE_MS, HEARTBEAT_INTERVAL_MS, WS_TOKEN, WS_TOKEN_NOTICES, SERVER_VERSION, SERVER_ROOT, PROTOCOL_VERSION } from "./config.js";
+import { WS_PORT, WS_HOST, WS_HOST_IS_LOOPBACK, WS_ALLOWED_ORIGINS, HELLO_DEADLINE_MS, HEARTBEAT_INTERVAL_MS, WS_TOKEN, WS_TOKEN_NOTICES, SERVER_VERSION, SERVER_ROOT, PROTOCOL_VERSION, SERVER_MODULE_HASH } from "./config.js";
+import { moduleFingerprint }          from "./module-hash.js";
 import { codedError } from "./errors.js";
 import { log }                        from "./log.js";
 import { pendingRequests }            from "./foundry-rpc.js";
@@ -319,7 +320,7 @@ export function startBridgeServer() {
             + `token-checked), but this world's "MCP bridge token" setting is stale and will fail from another machine.`);
         }
 
-        const { userId, userName, isGM, host, origin, worldId, systemId, foundryVersion } = msg;
+        const { userId, userName, isGM, host, origin, worldId, systemId, foundryVersion, moduleHash } = msg;
         if (!userId || !userName) {
           // Redact before echoing the frame: this line is downstream of the
           // token check, so a frame that reaches it carries the *correct*
@@ -349,6 +350,8 @@ export function startBridgeServer() {
           worldId: worldId || "",
           systemId: systemId || "",
           foundryVersion: foundryVersion || "",
+          // { moduleStale, moduleHash?, serverModuleHash? } — see module-hash.js
+          fingerprint: moduleFingerprint(moduleHash, SERVER_MODULE_HASH),
           connectedAt: Date.now(),
         };
         bridges.set(userId, bridge);
@@ -362,6 +365,10 @@ export function startBridgeServer() {
         // is actually authenticating?" is otherwise unanswerable from the log.
         const trustStr = !WS_TOKEN ? "" : trustedLocal ? " [local, no token required]" : " [token accepted]";
         log(`Bridge registered: ${userName}${hostStr} (${userId}) [${isGM ? "GM" : "player"}]${trustStr}`);
+        if (bridge.fingerprint.moduleStale) {
+          log(`Bridge ${userName}${hostStr} runs module files that differ from this server's module/ `
+            + `(module ${moduleHash || "sends no hash"}, server ${SERVER_MODULE_HASH}) — redeploy with scripts/deploy-module.mjs`);
+        }
 
         // Announce our version back to the module. The module compares this
         // against its own and warns the user (in the Foundry UI) if the server
@@ -376,6 +383,8 @@ export function startBridgeServer() {
             // Lets the out-of-date dialog print a `cd` that actually works
             // rather than guessing at ~/foundry-mcp-live.
             serverRoot: SERVER_ROOT,
+            // Lets the module tell its GM that its own files are stale.
+            moduleHash: SERVER_MODULE_HASH,
             // Hand the token to clients that are already trusted without it,
             // so the GM never has to transcribe a secret: the module stores it
             // in the world setting, and Foundry serves that to every other

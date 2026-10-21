@@ -3,8 +3,10 @@
  * Imported by both bridge management and MCP transport layers.
  */
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import { loadOrCreateWsToken } from "./bridge-token-store.js";
+import { hashModuleTree } from "./module-hash.js";
 
 // Server version — single source of truth is server/package.json, so a
 // `git pull` that bumps the package version is automatically reflected here
@@ -25,6 +27,15 @@ export const SERVER_VERSION = _serverVersion;
 export const SERVER_ROOT = (() => {
   try { return new URL("../..", import.meta.url).pathname.replace(/\/$/, ""); }
   catch { return ""; }
+})();
+
+// Content hash of the module/ tree beside this server, taken once at startup
+// (a `git pull` needs a restart anyway). Bridges report the hash baked into
+// their build-info.js; a mismatch means the Foundry install is not this code.
+// null when there is no module/ here (server deployed on its own).
+export const SERVER_MODULE_HASH = (() => {
+  try { return hashModuleTree(fileURLToPath(new URL("../../module", import.meta.url))); }
+  catch { return null; }
 })();
 
 // Wire-protocol version. Bump ONLY when the module↔server contract changes in

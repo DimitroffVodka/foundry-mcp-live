@@ -28,6 +28,7 @@ import { runFoundrySelfTest } from "./self-test.js";
 import { shouldAutoConnect } from "./auto-connect.js";
 import { DEFAULT_BRIDGE_PORT, normalizeBridgeUrl, resolveBridgeUrl } from "./bridge-url.js";
 import { resolveBridgeToken } from "./bridge-token.js";
+import { BUILD_INFO } from "./build-info.js";
 import {
   initRelay, startRelay, becomeGateway, publishGatewayKeys,
   listRelayClients, sendSignedRequest, notifyGatewayKeysRotated,
@@ -4550,7 +4551,9 @@ let reconnectTimer = null;
  * update notifications of its own, so this is how a stale server surfaces.
  */
 function checkServerVersion(serverVersion, serverProtocol) {
-  const moduleVersion = game.modules.get(MODULE_ID)?.version || "0.0.0";
+  // Drop a pre-release suffix: isNewerVersion ranks "1.0.0-dev.2026…" above
+  // "1.0.0", which would call every dev deploy's server outdated.
+  const moduleVersion = (game.modules.get(MODULE_ID)?.version || "0.0.0").replace(/-.*$/, "");
   const olderByProtocol = Number.isInteger(serverProtocol)
     ? serverProtocol < MODULE_PROTOCOL_VERSION
     : true; // missing protocol field → old server
@@ -4562,6 +4565,21 @@ function checkServerVersion(serverVersion, serverProtocol) {
   } else {
     serverOutdatedNotified = false; // server is current again; re-arm dialog
   }
+}
+
+/**
+ * The server hashes its own module/ tree; a different hash here means this
+ * install's files are not that code, whatever module.json's version says
+ * (stale scripts under a bumped manifest, or a hand-patched copy).
+ * ponytail: compares the hash baked into build-info.js, so a hand edit that
+ * leaves build-info.js alone goes unseen; deploy-module.mjs re-hashes the files.
+ */
+function checkModuleFingerprint(serverModuleHash) {
+  if (!serverModuleHash || serverModuleHash === BUILD_INFO.hash || !game.user?.isGM) return;
+  const moduleVersion = game.modules.get(MODULE_ID)?.version || "?";
+  ui.notifications?.warn(`Foundry MCP: this module (v${moduleVersion}, build ${BUILD_INFO.hash.slice(0, 12)}) `
+    + `does not match the MCP server's copy (build ${serverModuleHash.slice(0, 12)}): the installed files are stale `
+    + `or hand-patched. Redeploy with scripts/deploy-module.mjs and reload.`, { permanent: true });
 }
 
 /**
@@ -4692,6 +4710,9 @@ function connect() {
       // (via the hello-ack reply) lets us warn the user if the SERVER is stale.
       moduleVersion:   game.modules.get(MODULE_ID)?.version || "",
       protocolVersion: MODULE_PROTOCOL_VERSION,
+      // Content hash of these files (build-info.js). The version above is
+      // only what module.json claims.
+      moduleHash:      BUILD_INFO.hash,
     };
     // Each source is read defensively: the setting may not be registered (an
     // older module in this world), and localStorage throws outright under some
@@ -4727,6 +4748,7 @@ function connect() {
       if (serverAckTimer) { clearTimeout(serverAckTimer); serverAckTimer = null; }
       if (typeof request.serverRoot === "string") serverRootPath = request.serverRoot;
       checkServerVersion(request.serverVersion, request.protocolVersion);
+      checkModuleFingerprint(request.moduleHash);
       adoptBridgeToken(request.bridgeToken);
       return;
     }

@@ -21,6 +21,13 @@ All notable changes to Foundry MCP Live are documented in this file.
   `chat {action:"events"|"wait"}` reads an always-on, sequence-numbered event
   log, for "ask, then wait for the answer" loops.
 
+- **Module content fingerprint.** `module/scripts/build-info.js` carries a
+  SHA-256 of `module/` (`scripts/stamp-module.mjs`, checked in CI). The module
+  sends it in its hello; `bridge_status` and `list_connected_bridges` report
+  `moduleStale` with both hashes when an install differs from the server's
+  `module/`, and the GM gets a toast. `scripts/deploy-module.mjs <dir> [--dev]`
+  deploys from a staged copy and verifies the target by hash.
+
 ### Changed
 
 - `request_roll` uses DialogV2 instead of the deprecated v1 `Dialog`.
