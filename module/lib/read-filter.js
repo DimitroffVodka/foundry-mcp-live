@@ -7,7 +7,10 @@
  * player's bridge reads that source, so its reads apply the same rule here.
  */
 
-const SECTION_TAG = /<(\/?)section\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi;
+// A quote opens a value only right after `=`, as in the browser; anywhere else
+// (`data-n=don't`) it is an ordinary character, so it cannot run the tag on
+// past its `>` and swallow the sections after it.
+const SECTION_TAG = /<(\/?)section\b(?:[^>"'=]|=\s*"[^"]*"|=\s*'[^']*'|=(?!\s*["'])|["'])*>/gi;
 const CLASS_ATTR = /\sclass\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/i;
 
 /**
@@ -67,4 +70,45 @@ export function forViewer(data, viewer) {
     return out;
   };
   return walk(data, false);
+}
+
+/** Tokens of a snapshot `select` path: dotted keys, `[N]` and `[*]` (or `[]`). */
+export const pathTokens = (path) => String(path).match(/\[[^\]]*\]|[^.\[\]]+/g) || [];
+
+const tokenKind = (t) => (t === "[*]" || t === "[]" ? "all" : /^\[\d+\]$/.test(t) ? "index" : "key");
+
+/**
+ * forViewer for a value read at `path` of a document: the value is filtered as
+ * if it sat at that path, so `flags.gm-notes`, `ownership.<id>` or
+ * `system.activities` get the same rule as in a full read.
+ */
+export function forViewerAt(path, value, viewer) {
+  if (viewer.isGM) return value;
+  const toks = pathTokens(path);
+  const nest = (i, v) => {
+    if (i === toks.length) return v;
+    const kind = tokenKind(toks[i]);
+    if (kind === "key") return { [toks[i]]: nest(i + 1, v) };
+    if (kind === "index") return [nest(i + 1, v)];
+    return Array.isArray(v) ? v.map((x) => nest(i + 1, x)) : v;
+  };
+  const unnest = (i, v) => {
+    if (i === toks.length || v == null) return v;
+    const kind = tokenKind(toks[i]);
+    if (kind === "key") return unnest(i + 1, v[toks[i]]);
+    if (kind === "index") return unnest(i + 1, v[0]);
+    return Array.isArray(v) ? v.map((x) => unnest(i + 1, x)) : v;
+  };
+  return unnest(0, forViewer(nest(0, value), viewer));
+}
+
+/**
+ * A chat message's HTML as this viewer's chat log shows it, or null when core
+ * hides its content (blind rolls, others' whispers: ChatMessage#isContentVisible;
+ * GM reads stay untouched). Secrets show only to owners of the speaker's actor,
+ * or the GM when there is none.
+ */
+export function chatContent(msg, isGM) {
+  if (!isGM && msg.isContentVisible === false) return null;
+  return (msg.speakerActor?.isOwner ?? isGM) ? msg.content : removeSecrets(msg.content);
 }

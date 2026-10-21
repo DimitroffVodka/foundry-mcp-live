@@ -27,6 +27,7 @@ If the named user isn't connected, the tool errors with `"No bridge connected fo
 - Unrevealed `<section class="secret">` blocks are removed unless the player owns the document (chat: owns the speaker's actor), as `TextEditor.enrichHTML` does with `secrets: false`. Revealed secrets stay. Journals follow the same owner rule (`document` action `"journal"`).
 - Flags of namespaces other than `core` and the game system are dropped (modules such as GM Notes keep GM-only text in flags). `document` takes `flags: true` to keep them.
 - Every `ownership` map is cut to `{ <playerId>: <their level> }`, so a read does not reveal who else owns or observes what.
+- Chat content the player's own chat log hides (blind rolls, whispers to others) comes back empty with `contentHidden: true` and no roll results; the message itself is still listed. `get_debug_snapshot`'s chat preview follows the same rules.
 
 A GM bridge (the default route) returns everything unchanged.
 
