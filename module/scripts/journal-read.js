@@ -121,6 +121,10 @@ async function pageMarkdown(page, { enrich = false, secrets = false } = {}) {
   if (page.type === "video" || page.type === "pdf") return page.src ? `[${page.name}](${page.src})` : "";
   let html = page.text?.content ?? "";
   if (!html) return "";
+  // A page switched to the Markdown sheet (JOURNAL_ENTRY_PAGE_FORMATS.MARKDOWN) already stores Markdown.
+  if (page.text.format === 2) return html;
+  // Core shows secrets only to the page's owners; a caller cannot ask for more.
+  secrets = secrets === true && page.isOwner === true;
   if (enrich) html = await textEditor().enrichHTML(html, { secrets, relativeTo: page, async: true });
   return htmlToMarkdown(new DOMParser().parseFromString(html, "text/html").body, { secrets });
 }
@@ -183,7 +187,7 @@ async function findEntry({ id, name, pack }) {
 export async function getJournal(params = {}) {
   if (!params.id && !params.name) return { error: "journal read needs `id` or `name`." };
   const entry = await findEntry(params);
-  if (!entry || entry.documentName !== "JournalEntry") {
+  if (!entry || entry.documentName !== "JournalEntry" || !canSee(entry, "LIMITED")) {
     return { error: `Journal entry not found: ${params.id || params.name}${params.pack ? ` in ${params.pack}` : ""}` };
   }
   let pages = visiblePages(entry);

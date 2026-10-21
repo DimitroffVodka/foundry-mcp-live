@@ -14,7 +14,7 @@ import {
   safeSerializeHookArg,
   extractDocRef
 } from "../lib/audit.js";
-import { RELAY_TOOLS, findStoredCode } from "../lib/relay-guard.js";
+import { relayRefusal } from "../lib/relay-guard.js";
 import { flushCanvasRender } from "./canvas-render.js";
 import { designPreview } from "./design-preview.js";
 import { derivedView, getJournal, listJournals } from "./journal-read.js";
@@ -4991,23 +4991,9 @@ Hooks.once("ready", () => {
  * performed.
  */
 async function dispatchRelayTool(tool, params) {
-  const handler = RELAY_TOOLS.has(tool) && handlers[tool];
-  if (!handler) throw new Error(`Unknown tool: ${tool}`);
-
-  if (!game.settings.get(MODULE_ID, "relayAllowEvaluate")) {
-    const enable = 'Enable "Allow `evaluate` over the relay" in the module settings to change that.';
-    if (tool === "evaluate") {
-      throw new Error(`\`evaluate\` is not permitted over the relay in this world. ${enable}`);
-    }
-    // Code stored in a document runs later, in whoever's browser triggers it,
-    // so writing it is the same capability as evaluate.
-    const stored = findStoredCode(params);
-    if (stored.length) {
-      throw new Error(`Refused over the relay: this ${tool} call would store code that runs later `
-        + `(${stored.join("; ")}). ${enable}`);
-    }
-  }
-  return handler(params ?? {});
+  const refusal = relayRefusal(tool, params, game.settings.get(MODULE_ID, "relayAllowEvaluate"));
+  if (refusal) throw new Error(refusal);
+  return handlers[tool](params ?? {});
 }
 
 // Gateway control surface. Driven from Node over CDP — deliberately not a

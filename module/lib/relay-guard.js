@@ -35,6 +35,30 @@ export const RELAY_TOOLS = new Set([
   "request_ask",
 ]);
 
+/**
+ * Why a relayed call must be refused, or null if it may run. bridge.js
+ * dispatchRelayTool throws this before calling any handler.
+ *
+ * @param {string} tool
+ * @param {unknown} params
+ * @param {boolean} allowEvaluate  the world's relayAllowEvaluate setting
+ * @returns {string|null}
+ */
+export function relayRefusal(tool, params, allowEvaluate) {
+  if (!RELAY_TOOLS.has(tool)) return `Unknown tool: ${tool}`;
+  if (allowEvaluate) return null;
+  const enable = 'Enable "Allow `evaluate` over the relay" in the module settings to change that.';
+  if (tool === "evaluate") return `\`evaluate\` is not permitted over the relay in this world. ${enable}`;
+  // Code stored in a document runs later, in whoever's browser triggers it,
+  // so writing it is the same capability as evaluate.
+  const stored = findStoredCode(params);
+  if (stored.length) {
+    return `Refused over the relay: this ${tool} call would store code that runs later `
+      + `(${stored.join("; ")}). ${enable}`;
+  }
+  return null;
+}
+
 const MAX_DEPTH = 64;
 const nonEmpty = v => typeof v === "string" && v.trim() !== "";
 

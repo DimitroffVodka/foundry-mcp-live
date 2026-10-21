@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 
-import { RELAY_TOOLS, findStoredCode } from "../../module/lib/relay-guard.js";
+import { RELAY_TOOLS, findStoredCode, relayRefusal } from "../../module/lib/relay-guard.js";
 
 const root = new URL("../../", import.meta.url);
 const read = (p) => readFileSync(new URL(p, root), "utf8");
@@ -98,4 +98,26 @@ test("findStoredCode: reaches inside call_module_api args and refuses what it ca
   const top = deep;
   for (let i = 0; i < 100; i++) deep = deep.a = {};
   assert.match(findStoredCode(top)[0], /too deep/);
+});
+
+test("relayRefusal: unknown tools, evaluate and stored code are refused unless the world allows evaluate", () => {
+  const region = { regions: [{ name: "r", behaviors: [{ type: "executeScript", system: { source: "x()" } }] }] };
+  assert.match(relayRefusal("create_region", {}, true), /Unknown tool: create_region/);
+  assert.match(relayRefusal("evaluate", { script: "1" }, false), /not permitted over the relay/);
+  assert.match(relayRefusal("update_scene", region, false), /would store code/);
+  assert.equal(relayRefusal("update_scene", region, true), null);
+  assert.equal(relayRefusal("evaluate", { script: "1" }, true), null);
+  assert.equal(relayRefusal("get_actor", { actorId: "a" }, false), null);
+});
+
+// relayRefusal is only a barrier if the relay dispatcher consults it before any handler runs.
+test("dispatchRelayTool throws relayRefusal's verdict before calling a handler", () => {
+  const src = read("module/scripts/bridge.js");
+  const start = src.indexOf("async function dispatchRelayTool(");
+  assert.ok(start >= 0, "dispatchRelayTool not found in bridge.js");
+  const body = src.slice(start, src.indexOf("\n}", start));
+  const check = body.search(/const refusal = relayRefusal\(tool, params, /);
+  const thrown = body.indexOf("if (refusal) throw new Error(refusal);");
+  const call = body.indexOf("handlers[tool](");
+  assert.ok(check >= 0 && thrown > check && call > thrown, `dispatchRelayTool must check relayRefusal first:\n${body}`);
 });

@@ -118,6 +118,27 @@ test("getJournal enrich passes secrets and the page to enrichHTML; unseen pages 
   } finally { s.restore(); }
 });
 
+test("getJournal returns Markdown-format pages as stored instead of re-parsing them as HTML", async () => {
+  const md = "# Heading\n\nPara one.\n\n- a\n- b\n\n```\ncode  x\n```";
+  const s = stubGame({ entries: [entry("j1", "E", [page("p1", "P", md, { text: { content: md, format: 2 } })])] });
+  try {
+    assert.equal((await getJournal({ id: "j1" })).items[0].markdown, md);
+  } finally { s.restore(); }
+});
+
+test("getJournal shows secrets only to page owners and hides entries the user cannot see", async () => {
+  const s = stubGame({ entries: [
+    entry("j1", "E", [page("p1", "Mine", "a", { isOwner: true }), page("p2", "Theirs", "b", { isOwner: false })]),
+    entry("j2", "Hidden", [page("p3", "X", "c")], { testUserPermission: () => false }),
+  ] });
+  try {
+    await getJournal({ id: "j1", enrich: true, secrets: true });
+    assert.deepEqual(s.enrichCalls.map((c) => c.secrets), [true, false]);
+    assert.match((await getJournal({ id: "j2" })).error, /not found/);
+    assert.match((await getJournal({ name: "Hidden" })).error, /not found/);
+  } finally { s.restore(); }
+});
+
 test("listJournals: plain listing is paginated; query matches page text with a snippet and entry names", async () => {
   const s = stubGame({ entries: [
     entry("j1", "Village", [page("p1", "Inn", "The innkeeper hides a silver key under the bar.")]),
