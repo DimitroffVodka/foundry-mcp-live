@@ -192,7 +192,7 @@ List world collections. The `type` discriminator picks the collection.
   - `actor`: `[{ id, name, type, folder, img }]`
   - `scene`: `[{ id, name, active, folder }]`
   - `module`: `[{ id, title, version, active }]`
-  - `rollTable`: `[{ id, name, formula, results }]` (`results` is the entry count; there's no table-rolling tool — use `evaluate` with `game.tables.get(id).draw()`.)
+  - `rollTable`: `[{ id, name, formula, results }]` (`results` is the entry count; draw from one with `roll {table}`.)
   - `compendium`: `[{ id, label, type, system, count }]` — `id` is the collection path (e.g. `"vagabond.monsters"`); use it as `pack` in `search_compendium` / `document`.
   - `journal`: `{ total, offset, count, items, truncated, nextOffset?, note? }`. Without `query`, items are `{ id, name, folder, pages: [{ id, name, type }] }`; with `query`, `{ id, name, folder, matches: [{ pageId, pageName, snippet? }] }` (an entry whose name matches is listed even with no page match). `truncated: true` means more entries exist beyond this call; `note` says which `offset` to use next. Only entries/pages the routed user can see are listed.
 
@@ -322,9 +322,12 @@ Control the combat tracker. Merges the old `start_combat` / `advance_combat` / `
 ### `chat`
 Chat log access. The `action` discriminator selects the operation.
 
-- **Discriminator**: `action` — `"send"` or `"read"`.
+- **Discriminator**: `action` — `"send"`, `"read"`, `"events"`, or `"wait"`.
 - **`action: "read"`** — read history (not gated). Params: `limit?` (default 50, max 500), `since?` (ISO or epoch ms), `speaker?` (by `speaker.alias` or `speaker.actor`), `includeRolls?` (default true), `includeWhispers?` (default false). Returns `{ total, returned, messages: [{ id, timestamp, time, type, speaker, content, isRoll, rolls, whisperTo }] }`.
 - **`action: "send"`** — post a message (write-gated at call time: requires `FOUNDRY_MCP_ALLOW_WRITE=1`, otherwise the tool errors without touching Foundry). Speaker defaults to the routed user (GM); `speaker?` display alias; `actorId`/`tokenId` speak as that document; `whisperTo?` userName or array; `type?` `"OOC"` (default) / `"IC"` / `"EMOTE"` / `"WHISPER"` / `"ROLL"` / `"OTHER"` or the integer.
+- **`action: "events"`** — the live event cursor (not gated). Every client keeps a ring buffer of its last 300 events, recorded from `createChatMessage` (kind `"chat"`, or `"roll"` when the message carries rolls) plus `request {action:"ask"}` answers shown on that client (kind `"ask"`). Each event has a monotonic `seq`. Params: `sinceSeq?` (only events after it), `limit?` (newest kept, default 50, max 300), filters `kind?`, `user?` (author name/id), `speaker?` (alias/actor id), `contains?` (case-insensitive text/flavor substring). Returns `{ latestSeq, events: [{ seq, at, kind, messageId, user, userId, speaker, actorId, flavor?, content, rolls?, whisper }], dropped?, reset? }`. `dropped` means the cursor fell off the ring; `reset` means the client reloaded (seq restarted) and the read started from the beginning. Whispers the routed client can see are included and flagged. Unlike `trace`, it is always recording, so nothing between two calls is missed.
+- **`action: "wait"`** — block until the next event matching the same filters, or return at once if one is already buffered after `sinceSeq` (omit `sinceSeq` to wait for a new one only). `timeoutSeconds?` default 30, **max 40**: MCP clients give up near 60 s, so wait in rounds. Returns `{ status: "matched", latestSeq, event }` or `{ status: "timeout", latestSeq }`. A reply that lands after a timeout is still in the buffer — read it with `events`.
+- **Pattern — ask the table and wait for a reply**: `chat {action:"events", limit:1}` → keep `latestSeq` → post the question (`chat send`) → `chat {action:"wait", sinceSeq, user:"Alice"}`; on timeout call `wait` again with the same `sinceSeq`.
 
 ---
 
@@ -333,8 +336,8 @@ Chat log access. The `action` discriminator selects the operation.
 ### `request`
 Human-in-the-loop requests — these route prompts to a user's screen and are not achievable via `evaluate`. Merges the old `request_roll` / `request_check` / `request_item_use` (+ `request_attack_roll` / `request_damage_roll`).
 
-- **Discriminator**: `action` — `"roll"`, `"check"`, or `"itemUse"`.
-- **`action: "roll"`** — pops a Roll dialog on the target user's screen; waits for a human click.
+- **Discriminator**: `action` — `"roll"`, `"check"`, `"itemUse"`, or `"ask"`.
+- **`action: "roll"`** — pops a Roll dialog (DialogV2) on the target user's screen; waits for a human click.
   - Params: `formula` (required), `prompt?`, `label?`, `timeoutSeconds?` (default 60, max 300), `autoAccept?` (skip dialog, roll now — for GM automation/tests).
   - Returns one of: `{ mode: "rolled"|"auto_rolled", formula, total, result, dice }`, `{ mode: "cancelled"|"timed_out"|"dismissed"|"error", formula, ... }`.
 - **`action: "check"`** — system-native skill/ability/save check; dialogs always suppressed. Systems: dnd5e, pf2e, shadowdark, vagabond.
@@ -342,6 +345,11 @@ Human-in-the-loop requests — these route prompts to a user's screen and are no
 - **`action: "itemUse"`** — item combat workflow; dialogs suppressed. Param `phase`: `"full"` (default, recommended: Attack → Hit? → Damage → optional Apply, crit threaded), `"attack"` (roll only), `"damage"` (roll only; caller supplies crit).
   - Params: `actorId`, `itemId` (required), `targetIds?` **[full]** (damage applied on hit), `activityId?` (5e multi-attack items), `adv?`, `isCritical?` **[damage]**.
   - **System scope**: structured results for d20-style systems (dnd5e, pf2e) and **Shadowdark NPCs**. Shadowdark **player characters** have no structured programmatic result — use `use_item` (authentic card) or the `interact` click path instead.
+- **`action: "ask"`** — ask the target user a question in a DialogV2. Use it rather than a chat message when you need one structured answer from one player.
+  - Params: `question` (required, plain text — escaped), `title?` (default "A question from the GM"), `choices?` (button labels, up to 8, first is default; default `["Yes","No"]`), `freeText?` (adds a text box; default button "Answer"), `timeoutSeconds?` (default 30, max 300 — keep it under ~40, MCP clients give up near 60 s).
+  - Returns `{ status: "answered", user, question, choice, index, text? }`, `{ status: "dismissed", ... }` (closed without a button) or `{ status: "timeout", ... }` (the dialog is closed for them).
+  - Every outcome is also recorded in that client's event log as kind `"ask"`, so an answer that arrives after the MCP call gave up can be read with `chat {action:"events", kind:"ask", targetUser:<same user>}`.
+  - Title and labels are set by Foundry with `innerText`, so they are passed raw (pre-escaping would show `&amp;`); only the question goes into HTML.
 - If you target a player without an active browser, the dialog never shows and the call times out — target a connected user (see `list_connected_bridges`), or use `autoAccept` for unattended runs.
 
 ---
@@ -475,10 +483,11 @@ Open a design-harness fixture as a **real window inside a live Foundry client** 
 ## Dice & items
 
 ### `roll`
-Evaluate a dice formula. Can **force** specific dice results via `rig`.
+Evaluate a dice formula, or draw from a RollTable. Can **force** specific dice results via `rig`.
 
-- **Params**: `formula` (required — e.g. `"2d20kh + 5"`, `"(1d8+3)[slashing]"`, `"4d6dl1"`), `rig?` (forced face values, consumed in roll order; clamped to each die's faces; queue exhausts to real RNG).
-- **Returns**: `{ formula, total, result, dice: [{ faces, results: [{ result, active, discarded }] }] }`.
+- **Params**: `formula` (e.g. `"2d20kh + 5"`, `"(1d8+3)[slashing]"`, `"4d6dl1"`) **or** `table` (RollTable id, exact name, or UUID — compendium tables work), `rig?` (forced face values, consumed in roll order; clamped to each die's faces; queue exhausts to real RNG). **[table]** `displayChat?` (default true; false draws silently), `reset?` (put drawn results back first).
+- **Returns** (formula): `{ formula, total, result, dice: [{ faces, results: [{ result, active, discarded }] }], chatMessageId }`.
+- **Returns** (table): `{ table: { id, name, uuid }, roll: { formula, total }, results: [{ id, name, description?, type, documentUuid?, img, fromTable? }], remaining, note? }`. Uses the native `RollTable#draw`, so nested (linked) tables are drawn recursively (`fromTable` names the inner table), results are marked drawn when the table has no replacement (`remaining` counts what is left; `null` with replacement), and the chat card is Foundry's own. An empty `results` comes with a `note`: either no range covers the roll or everything is drawn — pass `reset: true`. Respects the per-world read-only toggle (a draw can mark results drawn).
 - **How rigging works**: the bridge patches `Die.prototype._roll` for the call's duration and watches for Foundry's roll-resolver dialog; both paths consume one shared queue.
 
 ### `use_item`
@@ -538,6 +547,17 @@ Create, update, activate, or delete a scene.
 - **Discriminator**: `action` — `"create"`, `"update"`, `"activate"`, or `"delete"`.
 - **Params**: `name?` **[create]** (also rename on update), `width?` (default 4000), `height?` (default 3000), `gridType?`, `gridSize?` (default 100), `gridAlpha?`, `folderId?`, `activate?` (default true), `padding?`, `backgroundColor?`, `background?` (v14 maps to `Level.background`/`Level.textures`), `foreground?`, `levelFog?` (v14), `fog?` `{mode:0|1|2, colors}`, `fogExploration?` (compat boolean; false→`fog.mode 0`), plus **[update]** `grid?`, `navigation?`, `sort?`, `navName?`, `initial?`; **[activate/delete]** `sceneId?`/`sceneName?`; **[delete]** `force?` (required to delete the active scene), `audit?`.
 - **`delete`** — permanent; `force: true` required when the scene is active.
+
+### `stage`
+Put things in front of the players during play — the GM staging actions that used to need `evaluate`. Respects the per-world read-only toggle.
+
+- **Discriminator**: `action` — `"showJournal"`, `"shareImage"`, `"pause"`, `"pullToScene"`, or `"playlist"`.
+- `users?` (names or ids) limits **showJournal / shareImage / pullToScene** to some players; omit for everyone.
+- **`showJournal`** — `journal` (id or name, required), `page?` (id or name), `force?` (default true: shown even to players without permission). Native `Journal.show`. Returns `{ shown: <uuid>, name, users }`.
+- **`shareImage`** — `image` (path or URL, required), `title?`, `caption?`. Native `ImagePopout#shareImage` (the GM's own screen does not pop up). Returns `{ shared, users }`.
+- **`pause`** — `paused?` (true/false; omit to toggle). `game.togglePause(…, {broadcast: true})`; GM only. Returns `{ paused }`.
+- **`pullToScene`** — `scene` (id or name, required). Moves the view of connected players (not the caller) to that scene **without** making it active — the `pullToScene` socket event `Scene#pullUsers` sends. Use `scene {action:"activate"}` instead when everyone should move and the scene should become active. GM only. Returns `{ scene, sceneId, pulled: [names] }`.
+- **`playlist`** — `playlist` (id or name, required), `sound?` (one track id or name), `play?` (default true; false stops). `playAll`/`playSound`/`stopAll`/`stopSound`. Returns `{ playlist, sound?, playing: [names] }`.
 
 ### `apply_damage`
 Applies damage to one or more targets with mixed outcomes (e.g., fireball with some targets saving).

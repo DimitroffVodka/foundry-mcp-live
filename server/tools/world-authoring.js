@@ -112,7 +112,7 @@ export function registerWorldAuthoringTools(mcp) {
     "action",
     { start: [], advance: [], end: [] });
 
-  // --- Request (merged: request_roll / request_check / request_item_use) ---
+  // --- Request (merged: request_roll / request_check / request_item_use / request_ask) ---
   registerRawTool(mcp, "request",
     "Human-in-the-loop requests routed to a user's screen (not achievable via evaluate). "
     + "action 'roll' — pop a Roll dialog on the target user's screen; returns when they click "
@@ -120,14 +120,25 @@ export function registerWorldAuthoringTools(mcp) {
     + "action 'check' — system-native skill/ability/save check on an actor; dialogs suppressed. "
     + "action 'itemUse' — item combat workflow; phase 'full' = attack→damage→apply (crit state "
     + "threaded through), 'attack' = attack roll only, 'damage' = damage roll only (caller "
-    + "supplies crit). Dialogs suppressed.",
+    + "supplies crit). Dialogs suppressed. "
+    + "action 'ask' — ask the target user a question in a dialog: `choices` become buttons, `freeText` "
+    + "adds a text box. Returns status answered (with choice/index/text), dismissed or timeout. Use 'ask' "
+    + "rather than a chat message when you need one structured answer from one player; target a user "
+    + "that list_connected_bridges shows connected, or the dialog never appears. MCP clients give up near "
+    + "60 s, so keep timeoutSeconds under ~40; a later answer is still recorded — read it with "
+    + "chat action 'events' (kind 'ask') routed to the same user.",
     {
-      action: z.enum(["roll", "check", "itemUse"]).describe("Which request to run."),
+      action: z.enum(["roll", "check", "itemUse", "ask"]).describe("Which request to run."),
+      // ask
+      question:       z.string().optional().describe("[ask] The question shown to the user (plain text)."),
+      title:          z.string().optional().describe("[ask] Dialog title. Default 'A question from the GM'."),
+      choices:        z.array(z.string()).max(8).optional().describe("[ask] Button labels, first is default. Default ['Yes','No'] (or ['Answer'] with freeText)."),
+      freeText:       z.boolean().optional().describe("[ask] Show a text box; its value is returned as text."),
       // roll
       formula:        z.string().optional().describe("[roll] Dice formula (e.g. '1d20+5', '2d6', '@abilities.str.mod + 1d20')."),
       prompt:         z.string().optional().describe("[roll] Text shown in the dialog. Default: 'The GM is requesting a roll.'"),
       label:          z.string().optional().describe("[roll] Short label for the dialog title + chat flavor."),
-      timeoutSeconds: z.number().int().min(5).max(300).optional().describe("[roll] Dialog wait time. Default 60s, max 300s."),
+      timeoutSeconds: z.number().int().min(5).max(300).optional().describe("[roll/ask] Dialog wait time. Default 60s (roll) / 30s (ask), max 300s."),
       autoAccept:     z.boolean().optional().describe("[roll] Skip the dialog and roll immediately. Default false."),
       // check
       actorId:    z.string().optional().describe("[check/itemUse] Actor ID or name."),
@@ -152,6 +163,12 @@ export function registerWorldAuthoringTools(mcp) {
         // the dialog timeout fires inside the bridge, not at the server layer.
         const bridgeTimeoutMs = Math.max(15_000, (timeoutSeconds + 5) * 1000);
         return callFoundry("request_roll", { ...rollRest, timeoutSeconds }, targetUser, bridgeTimeoutMs);
+      }
+      if (action === "ask") {
+        if (!rest.question) return { content: [{ type: "text", text: "Error: request action 'ask' requires question." }] };
+        const { question, title, choices, freeText, timeoutSeconds = 30 } = rest;
+        return callFoundry("request_ask", { question, title, choices, freeText, timeoutSeconds },
+          targetUser, (timeoutSeconds + 5) * 1000);
       }
       if (action === "check") {
         if (!rest.actorId && !rest.identifier) {
@@ -181,7 +198,7 @@ export function registerWorldAuthoringTools(mcp) {
         return callFoundry(bridgeTool, req, targetUser, timeoutMs);
       }
       return { content: [{ type: "text", text:
-        `Error: unknown action "${action}" for request. Valid: roll, check, itemUse.` }] };
+        `Error: unknown action "${action}" for request. Valid: roll, check, itemUse, ask.` }] };
     });
 
   // --- Apply damage (v0.10.0) ---
@@ -253,5 +270,42 @@ export function registerWorldAuthoringTools(mcp) {
       update:   ["sceneId"],
       activate: [],
       delete:   [],
+    });
+
+  // --- Stage (live-play staging; bridge handler `stage`, live-play.js) ---
+  registerRawTool(mcp, "stage",
+    "Put things in front of the players during play. "
+    + "action 'showJournal' needs journal (page optional) — opens the entry/page on players' screens "
+    + "(force default true: shown even to players without permission). "
+    + "action 'shareImage' needs image (path or URL; title/caption optional) — pops it up for players. "
+    + "action 'pause' (paused optional: true/false, omit to toggle) — pauses or resumes the game for everyone. "
+    + "action 'pullToScene' needs scene — moves connected players' view to that scene without making it "
+    + "the active scene; use scene action 'activate' rather than this when everyone should move and the "
+    + "scene should become active. "
+    + "action 'playlist' needs playlist (sound optional, play default true) — play or stop a playlist or one track. "
+    + "`users` (names or ids) limits showJournal/shareImage/pullToScene to some players; omit for everyone. "
+    + "Call list/scene_read first to find names; use this rather than evaluate for any of these.",
+    {
+      action:   z.enum(["showJournal", "shareImage", "pause", "pullToScene", "playlist"]).describe("Staging operation."),
+      journal:  z.string().optional().describe("[showJournal] JournalEntry id or name."),
+      page:     z.string().optional().describe("[showJournal] Page id or name within the entry; omit to show the whole entry."),
+      force:    z.boolean().optional().describe("[showJournal] Show even to users without view permission. Default true."),
+      image:    z.string().optional().describe("[shareImage] Image path (relative to Foundry data) or URL."),
+      title:    z.string().optional().describe("[shareImage] Popout window title."),
+      caption:  z.string().optional().describe("[shareImage] Caption under the image."),
+      paused:   z.boolean().optional().describe("[pause] true pauses, false resumes; omit to toggle."),
+      scene:    z.string().optional().describe("[pullToScene] Scene id or name."),
+      playlist: z.string().optional().describe("[playlist] Playlist id or name."),
+      sound:    z.string().optional().describe("[playlist] One sound (track) id or name; omit for the whole playlist."),
+      play:     z.boolean().optional().describe("[playlist] true plays, false stops. Default true."),
+      users:    z.array(z.string()).optional().describe("[showJournal/shareImage/pullToScene] User names or ids; omit for everyone."),
+      targetUser: z.string().optional().describe(TARGET_USER_DESC),
+    },
+    async ({ targetUser, ...params }) => {
+      const required = { showJournal: "journal", shareImage: "image", pullToScene: "scene", playlist: "playlist" }[params.action];
+      if (required && !params[required]) {
+        return { content: [{ type: "text", text: `Error: stage action '${params.action}' requires ${required}.` }] };
+      }
+      return callFoundry("stage", params, targetUser);
     });
 }

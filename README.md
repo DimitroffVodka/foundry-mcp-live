@@ -278,13 +278,14 @@ Full per-platform walkthrough: **[docs/updating-the-server.md](docs/updating-the
 | `token` | `action`: details, move, create, update, delete, toggleCondition, target, setLevel |
 | `interact` | Drive the live UI — `action`: click, dialog |
 | `use_item` | Runs the system's own item-use workflow, so attack and crit logic stay intact |
-| `roll` | Evaluate a dice formula; can force specific dice via `rig` |
-| `chat` | `action`: send, read (sending needs the write gate) |
+| `roll` | Evaluate a dice formula or draw from a RollTable; can force specific dice via `rig` |
+| `chat` | `action`: send, read, events (seq cursor), wait (block for the next reply) — sending needs the write gate |
 | `actor_write` | `action`: create, fromCompendium, update, delete (write gate) |
 | `scene` | `action`: create, update, activate, delete (write gate) |
 | `combat` | `action`: start, advance, end (write gate) |
+| `stage` | `action`: showJournal, shareImage, pause, pullToScene, playlist (write gate) |
 | `apply_damage` | Damage with per-target outcomes, HP clamped by the system (write gate) |
-| `request` | Prompts a real player's screen and waits — `action`: roll, check, itemUse (write gate) |
+| `request` | Prompts a real player's screen and waits — `action`: roll, check, itemUse, ask (write gate) |
 
 **Capture and investigation**
 
@@ -344,7 +345,7 @@ You should get a 200 with an `mcp-session-id` header.
 | `FOUNDRY_MCP_URL` | `http://127.0.0.1:3000/mcp` | Used by `proxy.mjs` to find the HTTP server |
 | `FOUNDRY_MCP_ALLOW_EVAL` | `1` | On by default. Set to `0`/`false`/`no`/`off` to drop the `evaluate` tool (arbitrary JS in Foundry context). See [SECURITY.md](SECURITY.md). |
 | `FOUNDRY_URLS` | empty | Comma-separated Foundry origins for restart-safe `bridge_status` probes, e.g. `http://localhost:30000`. |
-| `FOUNDRY_MCP_ALLOW_WRITE` | `0` | Set to `1` to enable the world-authoring tools (`actor_write`, `scene`, `combat`, `apply_damage`, `request`) that mutate persistent world data. See [SECURITY.md](SECURITY.md). |
+| `FOUNDRY_MCP_ALLOW_WRITE` | `0` | Set to `1` to enable the world-authoring tools (`actor_write`, `scene`, `stage`, `combat`, `apply_damage`, `request`) that mutate persistent world data. See [SECURITY.md](SECURITY.md). |
 | `FOUNDRY_MCP_ALLOW_SELF_TEST` | `0` | Set to `1` alongside `FOUNDRY_MCP_ALLOW_WRITE=1` to register the guarded `self_test` tool. |
 | `FOUNDRY_MCP_USAGE` | `1` | Tool-usage telemetry — records each tool call to an in-memory aggregate (`GET /api/usage`) and a JSONL log. Set to `0`/`false`/`no`/`off` to disable. |
 | `FOUNDRY_MCP_USAGE_LOG` | `server/usage-telemetry.jsonl` | Path for the per-call JSONL usage log. The log may contain truncated arg previews and `evaluate` bodies, so keep it local. |

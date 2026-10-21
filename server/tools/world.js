@@ -6,7 +6,7 @@
  * Merged surfaces (2026-08-19 reduction):
  *   - `list`     — list_actors / list_scenes / list_modules / list_tables / list_compendiums / list_journals
  *   - `document` — get_actor / get_item / get_compendium_document / get_actor_items / get_journal
- *   - `chat`     — send_chat_message / get_chat_messages (send is write-gated at call time)
+ *   - `chat`     — send_chat_message / get_chat_messages / events_read / events_wait (send is write-gated at call time)
  */
 import { z }                                                       from "zod";
 import { registerRoutedTool, registerRawTool, registerMergedTool,
@@ -84,16 +84,29 @@ export function registerWorldTools(mcp) {
     "Chat log access. action 'send' — post a chat message as the routed user (default GM); "
     + "optionally speak as actorId/tokenId or whisper via whisperTo. Write-gated: requires "
     + "FOUNDRY_MCP_ALLOW_WRITE=1 on the server. "
-    + "action 'read' — read chat history with filters limit/since/speaker/includeRolls/includeWhispers.",
+    + "action 'read' — read chat history with filters limit/since/speaker/includeRolls/includeWhispers. "
+    + "action 'events' — the live event cursor: every chat message, roll and `request` ask answer since "
+    + "`sinceSeq`, each with a monotonic seq number (whispers included, flagged). Use 'events' rather than 'read' "
+    + "to follow play turn by turn: keep the returned `latestSeq` and pass it as `sinceSeq` next time. "
+    + "The buffer holds the last 300 events of the routed client and restarts on reload (`reset: true`). "
+    + "action 'wait' — block until the next event matching kind/user/speaker/contains arrives (or one "
+    + "already after `sinceSeq`); `timeoutSeconds` max 40. MCP clients give up near 60 s, so wait in short "
+    + "rounds: a reply that lands after a timeout is still in the buffer — read it with 'events'. "
+    + "Call 'events' (or 'wait' with sinceSeq) after posting a question, so a fast reply is not missed.",
     {
-      action:          z.enum(["send", "read"]).describe("Chat operation."),
+      action:          z.enum(["send", "read", "events", "wait"]).describe("Chat operation."),
       content:         z.string().optional().describe("[send] HTML content of the message."),
-      speaker:         z.string().optional().describe("[send] Display alias for the speaker. [read] Filter by speaker.alias (actor name) or speaker.actor (actor id)."),
+      speaker:         z.string().optional().describe("[send] Display alias for the speaker. [read/events/wait] Filter by speaker alias (actor name) or actor id."),
       actorId:         z.string().optional().describe("[send] Speak as this actor."),
       tokenId:         z.string().optional().describe("[send] Speak as this token (on the active scene)."),
       whisperTo:       z.union([z.string(), z.array(z.string())]).optional().describe("[send] User name(s) to whisper to. Other users won't see the message."),
       type:            z.union([z.enum(["OOC", "IC", "EMOTE", "WHISPER", "ROLL", "OTHER"]), z.number().int()]).optional().describe("[send] Message type. Default 'OOC'."),
-      limit:           z.number().int().min(1).max(500).optional().describe("[read] Max messages to return. Default 50."),
+      limit:           z.number().int().min(1).max(500).optional().describe("[read/events] Max messages/events to return (newest kept). Default 50; events cap 300."),
+      sinceSeq:        z.number().int().min(0).optional().describe("[events/wait] Cursor: only events with seq greater than this. [wait] Omit to wait for the next new event only."),
+      kind:            z.enum(["chat", "roll", "ask"]).optional().describe("[events/wait] Event kind: chat (no rolls), roll (message carries rolls), ask (a `request` ask answer/timeout)."),
+      user:            z.string().optional().describe("[events/wait] Author user name or id."),
+      contains:        z.string().optional().describe("[events/wait] Case-insensitive substring of the message text or flavor."),
+      timeoutSeconds:  z.number().int().min(1).max(40).optional().describe("[wait] How long to block. Default 30, max 40."),
       since:           z.union([z.string(), z.number()]).optional().describe("[read] Only messages from this point on (ISO timestamp or epoch ms)."),
       includeRolls:    z.boolean().optional().describe("[read] Include roll messages. Default true."),
       includeWhispers: z.boolean().optional().describe("[read] Include whispers. Default false."),
@@ -105,6 +118,11 @@ export function registerWorldTools(mcp) {
       if (action === "send" && !ALLOW_WRITE) {
         return { content: [{ type: "text", text: codedMessage("FML-0003",
           "chat action 'send' requires the server env gate FOUNDRY_MCP_ALLOW_WRITE=1.") }] };
+      }
+      if (action === "events") return callFoundry("events_read", rest, targetUser);
+      if (action === "wait") {
+        const { timeoutSeconds = 30 } = rest;
+        return callFoundry("events_wait", rest, targetUser, (timeoutSeconds + 5) * 1000);
       }
       const bridgeTool = action === "send" ? "send_chat_message" : "get_chat_messages";
       return callFoundry(bridgeTool, rest, targetUser);
