@@ -57,7 +57,10 @@ export function registerWorldTools(mcp) {
     + "journal — a journal entry's pages as Markdown (`id`/`name`, optional `pack`, `page`), paginated "
     + "{total, offset, count, items, truncated}; `enrich` resolves @UUID links and inline rolls first. "
     + "`derived: true` on actor/item/compendium returns the PREPARED values the sheet shows "
-    + "(toObject(false).system, appliedEffects, getRollData()) instead of the stored source.",
+    + "(toObject(false).system, appliedEffects, getRollData()) instead of the stored source. "
+    + "Routed to a non-GM (targetUser a player), reads return what that player may see: unrevealed "
+    + "secret blocks only for the document's owners, other modules' flags only with `flags: true`, "
+    + "ownership cut to the player's own entry.",
     {
       action:     z.enum(["actor", "item", "compendium", "actorItems", "journal"]).describe("Document kind."),
       id:         z.string().optional().describe("[actor/item/compendium/journal] Document ID."),
@@ -73,6 +76,7 @@ export function registerWorldTools(mcp) {
       textOffset: z.number().int().min(0).optional().describe("[journal] With `page`: start at this character of the page's Markdown (to continue a cut page)."),
       enrich:     z.boolean().optional().describe("[journal] Run page HTML through TextEditor.enrichHTML first (resolves @UUID links, inline rolls, system enrichers). Default false."),
       secrets:    z.boolean().optional().describe("[journal] Include GM secret blocks. Default false."),
+      flags:      z.boolean().optional().describe("[actor/item/compendium] Through a non-GM bridge, keep other modules' flags (by default only core and the system's flags come back). No effect for a GM."),
     },
     { actor: "get_actor", item: "get_item", compendium: "get_compendium_document", actorItems: "get_actor_items",
       journal: "get_journal" },

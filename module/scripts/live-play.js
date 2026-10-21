@@ -12,6 +12,7 @@
  *                   scene, play/stop a playlist. All native Foundry calls.
  */
 import { runAuditedMutation } from "../lib/audit.js";
+import { removeSecrets } from "../lib/read-filter.js";
 
 export const EVENT_LOG_SIZE = 300;
 const MAX_WAIT_MS = 40_000;
@@ -72,7 +73,10 @@ export function createEventLog(size = EVENT_LOG_SIZE) {
 /** Compact, JSON-safe view of a ChatMessage for the event log. */
 export function chatEvent(msg) {
   const rolls = (msg.rolls ?? []).map((r) => ({ formula: r.formula, total: r.total }));
-  const text = String(msg.content ?? "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  // Core renders chat secrets for the speaker actor's owners (GM if no actor).
+  const owner = msg.speakerActor?.isOwner ?? globalThis.game?.user?.isGM === true;
+  const html = owner ? msg.content : removeSecrets(msg.content);
+  const text = String(html ?? "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
   return {
     kind: rolls.length ? "roll" : "chat",
     messageId: msg.id,

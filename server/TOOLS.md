@@ -23,6 +23,13 @@ If the named user isn't connected, the tool errors with `"No bridge connected fo
 
 **Why it matters:** testing module behavior from a player's perspective without losing the GM session. A GM-side `evaluate` won't surface permission-gated bugs the way a player-side one will.
 
+**Reads through a player's bridge.** Foundry sends every client the full source of every document, including GM-only HTML; the sheets hide it only when they render. So document reads routed to a non-GM apply the sheet's rules before replying: `document` (actor/item/compendium/actorItems, `derived` too), `search_compendium` with `full`, `get_data_model`'s sample, `token` details, `snapshot` take, `scene_read` placeables, `chat` read/events and `roll` table draws.
+- Unrevealed `<section class="secret">` blocks are removed unless the player owns the document (chat: owns the speaker's actor), as `TextEditor.enrichHTML` does with `secrets: false`. Revealed secrets stay. Journals follow the same owner rule (`document` action `"journal"`).
+- Flags of namespaces other than `core` and the game system are dropped (modules such as GM Notes keep GM-only text in flags). `document` takes `flags: true` to keep them.
+- Every `ownership` map is cut to `{ <playerId>: <their level> }`, so a read does not reveal who else owns or observes what.
+
+A GM bridge (the default route) returns everything unchanged.
+
 ### `audit` (optional, mutating tools only)
 
 Every tool that modifies the Foundry world (creates, updates, or deletes documents) accepts an optional `audit: true` parameter. When set, the tool returns an `audit` block containing a flight recorder of the mutation.
@@ -205,6 +212,7 @@ Read one document. The `action` discriminator picks the kind.
   - `pack` **[compendium, required]**, `id?` / `name?` **[compendium]** — fetch one entry from a pack.
   - `actorId` **[actorItems, required]** — actor id or exact name; `filter?` — item type (e.g. `"weapon"`).
   - `derived?` **[actor/item/compendium]** — return the prepared values instead of the stored source (see Returns). Default `false`.
+  - `flags?` **[actor/item/compendium]** — through a non-GM bridge, keep other modules' flags (see [Reads through a player's bridge](#targetuser-optional-every-routed-tool)). No effect for a GM. Default `false`.
   - **[journal]** `pack?` — read the entry from a compendium instead of the world; `page?` — one page by id or exact name; `offset?` / `limit?` — page pagination (`limit` default 20, max 100); `maxChars?` — Markdown budget for the reply (default 20000, max 200000); `textOffset?` — with `page`, start at this character (continue a cut page); `enrich?` — run the HTML through `TextEditor.enrichHTML` first; `secrets?` — include GM secret blocks (default `false`, in both modes).
 - **Returns**:
   - `actor` — full `actor.toObject()`: `_id, name, type, img, system, items, effects, prototypeToken, folder, sort, ownership, flags`. **Heavy.**
