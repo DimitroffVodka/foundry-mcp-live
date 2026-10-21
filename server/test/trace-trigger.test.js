@@ -19,6 +19,11 @@ test("trace trigger: ungated handlers fire with the write gate off", () => {
   assert.equal(triggerRefusal("roll", OFF), null);
 });
 
+test("trace trigger: changes_undo is never a trigger (the changes tool supplies its env gate)", () => {
+  assert.match(triggerRefusal("changes_undo", ON), /cannot be a trigger/);
+  assert.equal(triggerRefusal("changes_list", OFF), null);
+});
+
 test("trace trigger: write handlers need FOUNDRY_MCP_ALLOW_WRITE", () => {
   assert.match(triggerRefusal("create_actor", OFF), /ALLOW_WRITE/);
   assert.match(triggerRefusal("send_chat_message", OFF), /ALLOW_WRITE/);

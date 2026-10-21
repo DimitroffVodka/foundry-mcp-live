@@ -39,11 +39,12 @@ The server registers **zero resources and zero prompts**. Everything is exposed 
 - `scene_read`, `query_grid`, `screenshot`
 - `roll` (formula or RollTable draw), `use_item`, `token` (details/move/target/create/update/delete), `apply_damage`, `request`, `combat`, `stage`
 - `get_console_errors`, `bridge_status`, `reload_foundry`, `trace`, `evaluate`
+- `changes` — the change log of every document a write call touched, with undo by entry, call, or latest call
 - `list_connected_bridges` — use this first to confirm Foundry is connected
 
 ## How the tools are organized
 
-The server currently exposes ~32 tools (plus three design-harness tools — `render_fixture`, `preview_fixture` and `write_variant` — that register only when a harness exists on the server host; see `server/TOOLS.md`). **Do not assume one tool per verb** — many related operations are merged behind a single tool that takes an `action` discriminator. Read the tool's own schema; the `action` enum lists the valid modes for that tool.
+The server currently exposes ~33 tools (plus three design-harness tools — `render_fixture`, `preview_fixture` and `write_variant` — that register only when a harness exists on the server host; see `server/TOOLS.md`). **Do not assume one tool per verb** — many related operations are merged behind a single tool that takes an `action` discriminator. Read the tool's own schema; the `action` enum lists the valid modes for that tool.
 
 - **Actors:** `actor_write` (create/update/delete actors and create-from-compendium).
 - **World content:** `scene` (create/update/activate/delete scenes) and `combat` (start/advance/end encounters) — each merged tool takes an `action` param, not separate `create_*`/`update_*`/`delete_*` verbs.
@@ -115,8 +116,8 @@ Some tools change live Foundry state — they alter what GMs and players see in 
 There are **three independent gates** on mutation, all of which must allow the call:
 
 1. **Server env gate.** World-authoring tools (`actor_write`, `combat`, `scene`, `stage`, `apply_damage`, `request`, `self_test`) are registered only when `FOUNDRY_MCP_ALLOW_WRITE=1`; `chat` action 'send' requires the same gate at call time (read/events/wait are always available). `token` actions (move/create/update/delete/toggleCondition/target/setLevel) and `interact` are always registered — the per-world read-only toggle (gate 2) is what keeps a closed world safe. If a write tool isn't in your tool list, the gate is off **by design** — tell the user to set the env var rather than retrying. `evaluate` / `job_result` are registered by default and disappear only under `FOUNDRY_MCP_ALLOW_EVAL=0`.
-2. **Per-world read-only toggle.** The GM can flip a module setting, **"Allow AI to modify the world"** (default on), to make the bridge read-only without restarting the server. When it's off, every mutating tool refuses at the server's audit chokepoint even though the tool is still listed. If a mutation is rejected for this reason, tell the user to re-enable the setting — don't retry.
-3. **No undo on deletes.** Foundry has no undo for delete actions (`scene`/`actor_write` with `action: "delete"`, `token` action 'delete', …). Confirm the target with a read first; there is no recovery.
+2. **Per-world read-only toggle.** The GM can flip a module setting, **"Allow AI to modify the world"** (default on), to make the bridge read-only without restarting the server. When it's off — or unreadable, or holding anything but true — every handler declared write or delete access (in `module/lib/handler-access.js`, which includes chat, rolls, `evaluate` and `call_module_api`) is refused by the bridge's single dispatcher, even though the tool is still listed; the refusal names the setting. If a mutation is rejected for this reason, tell the user to re-enable the setting — don't retry.
+3. **Deletes are only as recoverable as the change log.** Foundry has no undo for delete actions (`scene`/`actor_write` with `action: "delete"`, `token` action 'delete', …). `changes` (action "undo") can recreate what a call deleted, from the routed browser tab's log (on a GM tab it survives a reload; 200 entries, oldest dropped first). Confirm the target with a read first anyway.
 
 The `request` tool pops a dialog on the **target user's** screen for its roll action and waits for a human to click. If you target a player without an active browser, the dialog never shows and the call times out — target a user you know is connected, or use `autoAccept` for unattended/test runs.
 

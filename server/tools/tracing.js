@@ -31,6 +31,8 @@ export function triggerRefusal(tool,
   if (!RELAY_TOOLS.has(tool)) {
     return `"${tool}" is not a bridge handler any server tool routes to; trigger only fires those (e.g. use_item).`;
   }
+  // The changes tool adds the env gate to an undo's params; a trigger would let the caller supply them.
+  if (tool === "changes_undo") return `"changes_undo" cannot be a trigger; undo with the changes tool.`;
   if (WRITE_GATED_HANDLERS.has(tool) && !gates.write) {
     return `"${tool}" is write-gated; the server has FOUNDRY_MCP_ALLOW_WRITE unset.`;
   }
