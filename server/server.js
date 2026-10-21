@@ -49,6 +49,17 @@ import { SERVER_INSTRUCTIONS }          from "./lib/server-instructions.js";
 // shared with `routeBridge`.
 startBridgeServer();
 
+// Puppeteer (relay gateway, client relaunch) adds SIGTERM/SIGHUP listeners that
+// close its browser but never exit, and any listener cancels Node's default
+// exit — so `systemctl stop` hung until SIGKILL. Puppeteer kills its browsers
+// on process exit, so exiting here is all shutdown needs.
+for (const signal of ["SIGTERM", "SIGHUP"]) {
+  process.on(signal, () => {
+    log(`${signal} received — exiting.`);
+    process.exit(0);
+  });
+}
+
 // Autonomous client recovery (opt-in via FOUNDRY_RELAUNCH_AUTO=1): watch for the
 // configured GM bridge dropping and relaunch the client automatically, with
 // backoff. Shares the single relaunch handler with the `relaunch_client` tool,
@@ -73,6 +84,7 @@ if (RELAY_CONFIG.enabled) {
     log(`ERROR: relay gateway failed to start: ${err?.message || err}`);
     log("Relayed clients are unavailable; the direct bridge is unaffected.");
     setRelayGateway(null);
+    gateway.stop();   // don't leave its browser running with nothing using it
   });
 } else {
   log("Relay gateway OFF (set FOUNDRY_RELAY_ENABLED=1 to reach remote clients).");
