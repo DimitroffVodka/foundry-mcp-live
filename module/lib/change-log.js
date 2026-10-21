@@ -16,6 +16,7 @@ export const NOT_UNDOABLE = Object.freeze({
   ChatMessage: "chat messages have already been seen; delete one by hand if needed",
   Setting: "settings are not restored by undo",
   User: "user changes are not restored by undo (they can lock people out)",
+  Macro: "macros are code; restore one by hand",
 });
 
 /** What undo cannot reach at all, because it never becomes a logged document change. */
@@ -107,6 +108,13 @@ export function describeEntry(e, full = false) {
  */
 export async function undo(log, selected, env) {
   if (!selected.length) return { ok: false, problems: ["nothing in the change log matches"] };
+  // Entries an earlier (possibly interrupted) undo already reversed are skipped,
+  // so retrying a half-finished undo resumes instead of repeating a write.
+  const done = selected.filter(e => e.undoneBy);
+  selected = selected.filter(e => !e.undoneBy);
+  if (!selected.length) {
+    return { ok: false, problems: [`already undone by call ${done[0].undoneBy}; to put it back, undo that call`] };
+  }
   const problems = [];
   const ids = new Set(selected.map(e => e.id));
   const refuse = new Set(env.refuseTools ?? []);
@@ -168,21 +176,23 @@ export async function undo(log, selected, env) {
   }
   if (problems.length) return { ok: false, problems, wouldRun: steps.map(stepSummary) };
 
-  const done = [];
+  const applied = [];
   for (const s of steps) {
     try { await env.apply(s); }
     catch (err) {
-      return { ok: false, problems: [`${s.op} ${s.uuid} failed: ${err?.message ?? err}`],
-        applied: done, notRun: steps.slice(done.length + 1).map(stepSummary) };
+      return { ok: false, problems: [`${s.op} ${s.uuid} failed: ${err?.message ?? err}; the steps before it `
+        + `stay applied, and running the same undo again resumes from here`],
+        applied, notRun: steps.slice(applied.length).map(stepSummary) };
     }
+    for (const id of s.entries) log.entries.find(e => e.id === id).undoneBy = env.callId;
     const after = await env.current(s.uuid);
     const target = s.op === "delete" ? null : s.data ?? selected.find(e => e.uuid === s.uuid).before;
     const mismatch = !target ? (after ? ["(still exists)"] : [])
       : !after ? ["(missing)"] : changedPaths(target, after, s.skip ?? ["_stats"]);
-    done.push({ ...stepSummary(s), readBack: mismatch.length ? { ok: false, paths: mismatch.slice(0, 20) } : { ok: true } });
+    applied.push({ ...stepSummary(s), readBack: mismatch.length ? { ok: false, paths: mismatch.slice(0, 20) } : { ok: true } });
   }
-  for (const e of selected) e.undoneBy = env.callId;
-  return { ok: true, undoCallId: env.callId, applied: done };
+  for (const e of selected) e.undoneBy = env.callId; // includes steps that needed no write
+  return { ok: true, undoCallId: env.callId, applied, ...(done.length ? { skipped: done.map(e => e.id) } : {}) };
 }
 
 function tag(e) {

@@ -184,6 +184,27 @@ test("drift refuses the whole undo and writes nothing", async () => {
   assert.equal(world.get("Actor.a1").system.hp, 3);
 });
 
+test("an undo that fails half way resumes on retry without repeating a write", async () => {
+  const { world, env, applied } = fakeWorld({ "Actor.a1": actor(3), "Actor.b1": { _id: "b1", name: "C" } });
+  const log = logWith(
+    { callId: "k1", action: "update", before: actor(5), after: actor(3) },
+    { callId: "k1", action: "update", uuid: "Actor.b1", before: { _id: "b1", name: "B" }, after: { _id: "b1", name: "C" } });
+  const apply = env.apply;
+  const first = await undo(log, log.select({}), { ...env, apply: async (s) => {
+    if (s.uuid === "Actor.a1") throw new Error("socket closed");
+    return apply(s);
+  } });
+  assert.equal(first.ok, false);
+  assert.deepEqual(first.notRun.map(s => s.uuid), ["Actor.a1"]);
+  assert.equal(world.get("Actor.b1").name, "B");
+  const again = await undo(log, log.select({}), { ...env, callId: "undo-2" });
+  assert.equal(again.ok, true, JSON.stringify(again));
+  assert.deepEqual(again.skipped, ["c2"]);
+  assert.deepEqual(applied, ["update", "update"]);
+  assert.equal(world.get("Actor.a1").system.hp, 5);
+  assert.match((await undo(log, log.select({}), env)).problems[0], /already undone by call undo-2/);
+});
+
 test("undo by entry id takes only that entry; an empty log says so", async () => {
   const log = logWith(
     { callId: "k1", action: "update", before: actor(5), after: actor(3) },
