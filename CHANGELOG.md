@@ -31,8 +31,9 @@ All notable changes to Foundry MCP Live are documented in this file.
   undoing it redoes. (32 → 33 tools)
 - **The change log survives a reload.** On a GM client it is stored in one
   hidden, GM-only JournalEntry (one log per bridge tab, 200 entries in total,
-  oldest pruned first, written at most once a second). The store is never
-  logged itself and never shown by `list` or `document`.
+  5M characters, oldest pruned first, written at most once a second). The store
+  is never logged itself and never shown by `list` or `document`; players'
+  browsers still receive it, as they do every journal.
 
 ### Changed
 

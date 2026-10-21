@@ -126,7 +126,7 @@ async function writeStore() {
   const options = { [STORE_OPTION]: true, render: false };
   // ponytail: two GM tabs writing their first entry at the same moment can make two stores; the first found wins.
   const store = game.journal.find(isChangeStore);
-  const { set, drop } = storeDelta(Object.keys(store?.getFlag(MODULE_ID, "entries") ?? {}), TAB_ID, dirty);
+  const { set, drop } = storeDelta(store?.getFlag(MODULE_ID, "entries"), TAB_ID, dirty);
   try {
     if (!store) {
       await JournalEntry.create({

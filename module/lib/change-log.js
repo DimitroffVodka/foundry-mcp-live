@@ -11,6 +11,8 @@
 
 export const LOG_LIMIT = 200;
 export const MAX_SNAPSHOT_CHARS = 200_000;
+// Every client downloads the store when it joins, so it is kept well under 200 full snapshots.
+export const MAX_STORE_CHARS = 5_000_000;
 
 // Documents whose changes are logged but never undone.
 export const NOT_UNDOABLE = Object.freeze({
@@ -119,6 +121,13 @@ export function describeEntry(e, full = false) {
  */
 export async function undo(log, selected, env) {
   if (!selected.length) return { ok: false, problems: ["nothing in the change log matches"] };
+  // Chat, settings, users and macros are never undone. Undoing a whole call
+  // leaves them alone and says so; selected on their own, they are refused below.
+  const leftAlone = selected.filter(e => NOT_UNDOABLE[e.documentName]);
+  if (leftAlone.length === selected.length) leftAlone.length = 0;
+  else selected = selected.filter(e => !NOT_UNDOABLE[e.documentName]);
+  const left = leftAlone.length
+    ? { leftAlone: leftAlone.map(e => ({ id: e.id, documentName: e.documentName, reason: e.reason })) } : {};
   // Entries an earlier (possibly interrupted) undo already reversed are skipped,
   // so retrying a half-finished undo resumes instead of repeating a write.
   const done = selected.filter(e => e.undoneBy);
@@ -166,7 +175,9 @@ export async function undo(log, selected, env) {
     let step;
     if (!target) step = { ...base, op: "delete" };
     else if (!expected) {
-      step = { ...base, op: "create", parentUuid: first.parentUuid, pack: first.pack, data: target };
+      // An update's snapshot leaves out embedded collections; the delete's has them.
+      const data = first.action === "update" ? { ...target, ...pick(last.before, last.embedded) } : target;
+      step = { ...base, op: "create", parentUuid: first.parentUuid, pack: first.pack, data };
       recreating.add(uuid);
     } else {
       const update = cur ? restoreUpdate(target, cur, skip) : {};
@@ -185,15 +196,18 @@ export async function undo(log, selected, env) {
     const why = await env.permission(s);
     if (why) problems.push(`${s.uuid}: ${why}`);
   }
-  if (problems.length) return { ok: false, problems, wouldRun: steps.map(stepSummary) };
+  if (problems.length) return { ok: false, problems, wouldRun: steps.map(stepSummary), ...left };
+  // The steps that run are logged under this undo's own call, so an undo with no
+  // ids would now pick this undo as the latest call and redo instead of resuming.
+  const retry = selected.length === 1 ? { entryId: selected[0].id } : { callId: selected[0].callId };
 
   const applied = [];
   for (const s of steps) {
     try { await env.apply(s); }
     catch (err) {
       return { ok: false, problems: [`${s.op} ${s.uuid} failed: ${err?.message ?? err}; the steps before it `
-        + `stay applied, and running the same undo again resumes from here`],
-        applied, notRun: steps.slice(applied.length).map(stepSummary) };
+        + `stay applied; undo again with ${JSON.stringify(retry)} to resume from here`],
+        retry, applied, notRun: steps.slice(applied.length).map(stepSummary), ...left };
     }
     for (const id of s.entries) { log.entries.find(e => e.id === id).undoneBy = env.callId; log.dirty?.add(id); }
     const after = await env.current(s.uuid);
@@ -203,7 +217,7 @@ export async function undo(log, selected, env) {
     applied.push({ ...stepSummary(s), readBack: mismatch.length ? { ok: false, paths: mismatch.slice(0, 20) } : { ok: true } });
   }
   for (const e of selected) { e.undoneBy = env.callId; log.dirty?.add(e.id); } // includes steps that needed no write
-  return { ok: true, undoCallId: env.callId, applied, ...(done.length ? { skipped: done.map(e => e.id) } : {}) };
+  return { ok: true, undoCallId: env.callId, applied, ...(done.length ? { skipped: done.map(e => e.id) } : {}), ...left };
 }
 
 function tag(e) {
@@ -232,17 +246,23 @@ const parseKey = k => { const [ms, tab, id] = k.split("_"); return { ms: +ms, ta
 const byAge = (a, b) => { const x = parseKey(a), y = parseKey(b); return x.ms - y.ms || x.seq - y.seq; };
 
 /**
- * What to write for `tab`: its `dirty` entries, then the whole store pruned to
- * `limit` entries, oldest first (other tabs' entries included).
- * @param {string[]} storedKeys keys under flags.foundry-mcp-live.entries now
+ * What to write for `tab`: its `dirty` entries, then the whole store pruned,
+ * oldest first (other tabs' entries included), to `limit` entries and
+ * `maxChars` characters. The newest entry is always kept.
+ * @param {Record<string,string>} stored flags.foundry-mcp-live.entries now
  * @returns {{ set: Record<string,string>, drop: string[] }}
  */
-export function storeDelta(storedKeys, tab, dirty, limit = LOG_LIMIT) {
+export function storeDelta(stored, tab, dirty, { limit = LOG_LIMIT, maxChars = MAX_STORE_CHARS } = {}) {
+  stored ??= {};
   const set = Object.fromEntries(dirty.map(e => [keyOf(tab, e), JSON.stringify(e)]));
-  const all = [...new Set([...storedKeys, ...Object.keys(set)])].sort(byAge);
-  const drop = all.slice(0, Math.max(0, all.length - limit));
+  const merged = { ...stored, ...set };
+  const all = Object.keys(merged).sort(byAge);
+  let cut = Math.max(0, all.length - limit);
+  let chars = all.slice(cut).reduce((n, k) => n + merged[k].length, 0);
+  while (cut < all.length - 1 && chars > maxChars) chars -= merged[all[cut++]].length;
+  const drop = all.slice(0, cut);
   for (const k of drop) delete set[k];
-  return { set, drop: drop.filter(k => storedKeys.includes(k)) };
+  return { set, drop: drop.filter(k => k in stored) };
 }
 
 /** This tab's stored entries, oldest first, from the store's flags.foundry-mcp-live.entries. */
@@ -256,6 +276,7 @@ export function loadStored(stored, tab) {
 // ---------------------------------------------------------------------------
 
 const isObj = v => v !== null && typeof v === "object" && !Array.isArray(v);
+const pick = (obj, keys) => Object.fromEntries(keys.filter(k => isObj(obj) && k in obj).map(k => [k, obj[k]]));
 const omit = (obj, keys) => (isObj(obj) ? Object.fromEntries(Object.entries(obj).filter(([k]) => !keys.includes(k))) : obj);
 
 function same(a, b) {

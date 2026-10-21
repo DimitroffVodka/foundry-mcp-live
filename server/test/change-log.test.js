@@ -196,6 +196,7 @@ test("an undo that fails half way resumes on retry without repeating a write", a
   } });
   assert.equal(first.ok, false);
   assert.deepEqual(first.notRun.map(s => s.uuid), ["Actor.a1"]);
+  assert.deepEqual(first.retry, { callId: "k1" });
   assert.equal(world.get("Actor.b1").name, "B");
   const again = await undo(log, log.select({}), { ...env, callId: "undo-2" });
   assert.equal(again.ok, true, JSON.stringify(again));
@@ -218,7 +219,7 @@ test("undo by entry id takes only that entry; an empty log says so", async () =>
 function writeTo(stored, tab, log, limit) {
   const dirty = log.entries.filter(e => log.dirty.has(e.id));
   log.dirty.clear();
-  const { set, drop } = storeDelta(Object.keys(stored), tab, dirty, limit);
+  const { set, drop } = storeDelta(stored, tab, dirty, { limit });
   for (const k of drop) delete stored[k];
   return Object.assign(stored, set);
 }
@@ -272,11 +273,51 @@ test("store: total kept to the limit, oldest first across tabs; a pruned dirty e
   assert.deepEqual(Object.keys(stored).sort().map(k => k.split("_").slice(1).join(" ")), ["tabB c1", "tabA c2", "tabB c2"]);
   // limit 1 with two new entries: only the newest is written, older stored ones are dropped
   for (let n = 0; n < 2; n++) a.record({ callId: "k", action: "create", documentName: "Item", uuid: `Item.n${n}`, after: {} });
-  const { set, drop } = storeDelta(Object.keys(stored), "tabA", a.entries.filter(e => a.dirty.has(e.id)), 1);
+  const { set, drop } = storeDelta(stored, "tabA", a.entries.filter(e => a.dirty.has(e.id)), { limit: 1 });
   assert.deepEqual(Object.keys(set).map(k => k.split("_")[2]), ["c4"]);
   assert.equal(drop.length, 3);
   // seq order breaks ties inside one millisecond (c10 after c9, not before)
   const same = createChangeLog({ now: () => time(0) });
   for (let n = 0; n < 10; n++) same.record({ callId: "k", action: "create", documentName: "Item", uuid: `Item.s${n}`, after: {} });
   assert.deepEqual(loadStored(writeTo({}, "t", same, 2), "t").map(e => e.id), ["c9", "c10"]);
+});
+
+test("undo of update-then-delete in one call recreates the document with its embedded docs", async () => {
+  const { world, env } = fakeWorld({});
+  const item = (uses, effects) => ({ _id: "i1", name: "Potion", system: { uses }, effects, _stats: { modifiedTime: uses } });
+  const log = createChangeLog();
+  log.begin("k1", "use_item");
+  log.record({ callId: "k1", tool: "use_item", action: "update", documentName: "Item", uuid: "Item.i1", embedded: ["effects"],
+    before: item(1, [{ _id: "e1" }]), after: item(0, [{ _id: "e1" }]) });
+  log.record({ callId: "k1", tool: "use_item", action: "delete", documentName: "Item", uuid: "Item.i1", embedded: ["effects"],
+    before: item(0, [{ _id: "e1" }]) });
+  const res = await undo(log, log.select({}), env);
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(world.get("Item.i1").system.uses, 1);
+  assert.deepEqual(world.get("Item.i1").effects, [{ _id: "e1" }]);
+});
+
+test("undoing a whole call leaves its chat messages alone and says so", async () => {
+  const { world, env } = fakeWorld({ "Actor.a1": actor(3) });
+  const log = createChangeLog();
+  log.begin("k1", "use_item");
+  log.record({ callId: "k1", tool: "use_item", action: "create", documentName: "ChatMessage", uuid: "ChatMessage.m", after: {} });
+  log.record({ callId: "k1", tool: "use_item", action: "update", documentName: "Actor", uuid: "Actor.a1", embedded: ["items"],
+    before: actor(5), after: actor(3) });
+  const res = await undo(log, log.select({}), env);
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(world.get("Actor.a1").system.hp, 5);
+  assert.deepEqual(res.leftAlone.map(e => e.id), ["c1"]);
+  assert.equal(log.entries[0].undoneBy, undefined);
+  // selected on its own, a chat message is still refused
+  assert.match((await undo(log, log.select({ entryId: "c1" }), env)).problems[0], /chat messages/);
+});
+
+test("store: the total character cap prunes oldest first and always keeps the newest entry", () => {
+  const log = createChangeLog({ now: () => "2026-01-01T00:00:00.000Z" });
+  for (let n = 0; n < 4; n++) log.record({ callId: "k", action: "create", documentName: "Item", uuid: `Item.${n}`, after: { pad: "x".repeat(100) } });
+  const size = JSON.stringify(log.entries[0]).length;
+  const { set } = storeDelta({}, "t", log.entries, { maxChars: size * 2 + 1 });
+  assert.deepEqual(Object.keys(set).map(k => k.split("_")[2]), ["c3", "c4"]);
+  assert.deepEqual(Object.keys(storeDelta({}, "t", log.entries, { maxChars: 1 }).set).map(k => k.split("_")[2]), ["c4"]);
 });
