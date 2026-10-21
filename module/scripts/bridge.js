@@ -14,6 +14,7 @@ import {
   safeSerializeHookArg,
   extractDocRef
 } from "../lib/audit.js";
+import { RELAY_TOOLS, findStoredCode } from "../lib/relay-guard.js";
 import { flushCanvasRender } from "./canvas-render.js";
 import { designPreview } from "./design-preview.js";
 import { createRuntimeJobStore } from "./runtime-jobs.js";
@@ -4874,7 +4875,9 @@ Hooks.once("init", () => {
   game.settings.register(MODULE_ID, "relayAllowEvaluate", {
     name: "Allow `evaluate` over the relay",
     hint: "Off by default. When off, remote clients refuse relayed `evaluate` calls even "
-        + "if the MCP server has evaluation enabled. Only turn this on if you trust every "
+        + "if the MCP server has evaluation enabled, and relayed writes that would store a "
+        + "script (Region script/macro behaviors, script macros, Monk's Active Tiles actions, "
+        + "Mass Edit spawn scripts, Item Piles macros). Only turn this on if you trust every "
         + "GM-capable user in this world.",
     scope: "world",
     config: true,
@@ -4973,14 +4976,21 @@ Hooks.once("ready", () => {
  * performed.
  */
 async function dispatchRelayTool(tool, params) {
-  const handler = handlers[tool];
+  const handler = RELAY_TOOLS.has(tool) && handlers[tool];
   if (!handler) throw new Error(`Unknown tool: ${tool}`);
 
-  if (tool === "evaluate" && !game.settings.get(MODULE_ID, "relayAllowEvaluate")) {
-    throw new Error(
-      "`evaluate` is not permitted over the relay in this world. Enable "
-      + '"Allow `evaluate` over the relay" in the module settings to change that.'
-    );
+  if (!game.settings.get(MODULE_ID, "relayAllowEvaluate")) {
+    const enable = 'Enable "Allow `evaluate` over the relay" in the module settings to change that.';
+    if (tool === "evaluate") {
+      throw new Error(`\`evaluate\` is not permitted over the relay in this world. ${enable}`);
+    }
+    // Code stored in a document runs later, in whoever's browser triggers it,
+    // so writing it is the same capability as evaluate.
+    const stored = findStoredCode(params);
+    if (stored.length) {
+      throw new Error(`Refused over the relay: this ${tool} call would store code that runs later `
+        + `(${stored.join("; ")}). ${enable}`);
+    }
   }
   return handler(params ?? {});
 }
