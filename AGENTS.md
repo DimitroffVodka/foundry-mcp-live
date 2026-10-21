@@ -83,6 +83,17 @@ approval_mode = "approve"
 
 Restart Codex after editing. The server should appear in the MCP list with tools loaded. The status line `Auth: Unsupported` is **normal** for local unauthenticated use — it only matters if `BRIDGE_TOKEN` is set on the server (see below).
 
+## Claude Code plugin
+
+Claude Code users can install the connection and the Foundry skills in one step instead of configuring the server by hand:
+
+```
+/plugin marketplace add DimitroffVodka/foundry-mcp-live
+/plugin install foundry-mcp-live@foundry-mcp-live
+```
+
+The plugin (`plugins/foundry-mcp-live/`) only points at a running server; it never starts one. Its `.mcp.json` uses `FOUNDRY_MCP_URL` (default `http://127.0.0.1:3000/mcp`) and sends `FOUNDRY_MCP_TOKEN` as the bearer token when set. Its `foundry-live` skill is the first-message protocol above. Keep `plugin.json`'s version equal to `module/module.json`; CI checks it.
+
 ## Prerequisites for connection
 
 1. MCP server is running: `cd server && npm start` (or `server\start.bat` on Windows). Default port 3000.
