@@ -30,6 +30,7 @@ function registeredTools() {
 // a param/setting and not a dead tool.
 const NON_TOOL_IDENTIFIERS = new Set([
   "action",            // discriminator param on the merged tools
+  "mode",              // query_grid discriminator param
   "phase",             // request itemUse param
   "pathed",            // move_token param
   "autoaccept",        // request_* param (matched case-insensitively below)

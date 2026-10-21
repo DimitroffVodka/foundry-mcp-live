@@ -84,13 +84,35 @@ export function registerCanvasTools(mcp) {
       delete: ["tokens"], toggleCondition: ["tokenName", "condition"], target: ["tokens"], setLevel: [] });
 
   // --- Spatial grid query (structured alternative to screenshot-based spatial reasoning) ---
+  const point = z.union([z.string(), z.object({ x: z.number(), y: z.number() })]);
   registerRoutedTool(mcp, "query_grid",
-    "Query spatial grid state as structured data — the video-game approach. Returns per-cell booleans for explored (fog), visible (current line-of-sight), and occupied (token present). Pass either `cells` (array of {gx,gy} grid coords) or `region` ({minGX, minGY, maxGX, maxGY}) to query a rectangular area. Grid coords are 0-indexed; pixel centers are returned for each cell. "
-    + "Use this instead of screenshot for spatial reasoning — it's cheaper, faster, "
-    + "and deterministic.",
+    "Query spatial state as structured data — the video-game approach. Read-only: nothing moves. "
+    + "Use this instead of screenshot for spatial reasoning — it's cheaper, faster, and deterministic. "
+    + "mode 'cells' (default) — per-cell booleans for explored (fog), visible (current line-of-sight) and occupied "
+    + "(token present); pass `cells` ({gx,gy} list) or `region` ({minGX,minGY,maxGX,maxGY}); max 2500 cells. "
+    + "mode 'path' — from + to: the wall-aware A* route a token move would take (grid waypoints, steps, distance); "
+    + "call it before token action 'move' to see whether a destination is reachable. "
+    + "mode 'collision' — from + to: which walls lie between two points for each of move/sight/light/sound "
+    + "(`types` narrows it), using Foundry's own collision test, so doors, limited and one-way walls count as core "
+    + "counts them. "
+    + "mode 'range' — from + distance: tokens within that distance (scene units), nearest first; "
+    + "lineOfSight:true drops tokens a sight wall hides. "
+    + "mode 'measure' — from + to, or waypoints: grid distance using the scene's diagonal rule; works without a "
+    + "drawn canvas and on any scene (sceneId). "
+    + "path, collision and range test walls, which Foundry only loads for the scene on the routed client's "
+    + "canvas: view that scene first. from/to take a token (id, name or actor name) or a pixel point {x,y}.",
     {
-      cells:  z.array(z.object({ gx: z.number(), gy: z.number() })).optional().describe("Explicit grid cells to query. Mutually exclusive with `region`."),
-      region: z.object({ minGX: z.number(), minGY: z.number(), maxGX: z.number(), maxGY: z.number() }).optional().describe("Bounding box in grid coords (inclusive). Max 2500 cells."),
+      mode:        z.enum(["cells", "path", "collision", "range", "measure"]).optional().describe("Query kind. Default 'cells'."),
+      cells:       z.array(z.object({ gx: z.number(), gy: z.number() })).optional().describe("[cells] Explicit grid cells to query. Mutually exclusive with `region`."),
+      region:      z.object({ minGX: z.number(), minGY: z.number(), maxGX: z.number(), maxGY: z.number() }).optional().describe("[cells] Bounding box in grid coords (inclusive). Max 2500 cells."),
+      from:        point.optional().describe("[path/collision/range/measure] Token id/name/actor name, or a pixel point {x,y}."),
+      to:          point.optional().describe("[path/collision/measure] Token or pixel point {x,y}."),
+      maxNodes:    z.number().int().min(1).max(10000).optional().describe("[path] A* cells to explore before giving up. Default 2500."),
+      types:       z.array(z.enum(["move", "sight", "light", "sound"])).optional().describe("[collision] Restriction types to test. Default all four."),
+      distance:    z.number().min(0).optional().describe("[range] Radius in scene units (e.g. feet)."),
+      lineOfSight: z.boolean().optional().describe("[range] Keep only tokens with no sight wall in between."),
+      waypoints:   z.array(z.object({ x: z.number(), y: z.number() })).min(2).max(100).optional().describe("[measure] Pixel points to measure along, instead of from/to."),
+      sceneId:     z.string().optional().describe("[measure] Scene to measure on. Default: the scene on the canvas."),
     }, "query_grid");
 
   // Merged: screenshot (canvas), screenshot_dom (dom), capture_scene (scene_grid).
