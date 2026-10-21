@@ -5,12 +5,13 @@ import { once } from "node:events";
 
 const serverPath = new URL("../server.js", import.meta.url).pathname;
 
-// Puppeteer's launcher adds a SIGTERM listener that closes its browser and
-// never exits. The preload stands in for it: with any such listener present,
-// the server must still exit on SIGTERM instead of waiting for SIGKILL.
-test("server exits on SIGTERM even when another SIGTERM listener exists", { timeout: 20_000 }, async () => {
+// Puppeteer's launcher adds SIGTERM and SIGHUP listeners that close its browser
+// and never exit. The preload stands in for them: with such a listener present,
+// the server must still exit on the signal instead of waiting for SIGKILL.
+for (const signal of ["SIGTERM", "SIGHUP"]) {
+test(`server exits on ${signal} even when another ${signal} listener exists`, { timeout: 20_000 }, async () => {
   const child = spawn(process.execPath, [
-    "--import", "data:text/javascript,process.on('SIGTERM', () => {})",
+    "--import", `data:text/javascript,process.on('${signal}', () => {})`,
     serverPath,
   ], {
     env: {
@@ -35,11 +36,12 @@ test("server exits on SIGTERM even when another SIGTERM listener exists", { time
   });
 
   const exited = once(child, "exit");
-  child.kill("SIGTERM");
+  child.kill(signal);
   const timer = setTimeout(() => child.kill("SIGKILL"), 5_000);
-  const [code, signal] = await exited;
+  const [code, exitSignal] = await exited;
   clearTimeout(timer);
 
-  assert.equal(signal, null, `server ignored SIGTERM and had to be killed:\n${stderr}`);
+  assert.equal(exitSignal, null, `server ignored ${signal} and had to be killed:\n${stderr}`);
   assert.equal(code, 0);
 });
+}
