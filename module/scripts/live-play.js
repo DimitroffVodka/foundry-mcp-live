@@ -12,6 +12,7 @@
  *                   scene, play/stop a playlist. All native Foundry calls.
  */
 import { runAuditedMutation } from "../lib/audit.js";
+import { chatContent } from "../lib/read-filter.js";
 
 export const EVENT_LOG_SIZE = 300;
 const MAX_WAIT_MS = 40_000;
@@ -71,16 +72,19 @@ export function createEventLog(size = EVENT_LOG_SIZE) {
 
 /** Compact, JSON-safe view of a ChatMessage for the event log. */
 export function chatEvent(msg) {
-  const rolls = (msg.rolls ?? []).map((r) => ({ formula: r.formula, total: r.total }));
-  const text = String(msg.content ?? "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  const html = chatContent(msg, globalThis.game?.user?.isGM === true);
+  // A hidden (blind) roll keeps its kind but not its results, as in core's chat log.
+  const rolls = html === null ? [] : (msg.rolls ?? []).map((r) => ({ formula: r.formula, total: r.total }));
+  const text = String(html ?? "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
   return {
-    kind: rolls.length ? "roll" : "chat",
+    kind: msg.rolls?.length ? "roll" : "chat",
     messageId: msg.id,
     user: msg.author?.name ?? null,
     userId: msg.author?.id ?? null,
     speaker: msg.speaker?.alias ?? null,
     actorId: msg.speaker?.actor ?? null,
-    ...(msg.flavor ? { flavor: String(msg.flavor).replace(/<[^>]*>/g, " ").trim().slice(0, 200) } : {}),
+    ...(html === null ? { contentHidden: true } : {}),
+    ...(msg.flavor && html !== null ? { flavor: String(msg.flavor).replace(/<[^>]*>/g, " ").trim().slice(0, 200) } : {}),
     content: text.slice(0, 500),
     ...(rolls.length ? { rolls } : {}),
     whisper: !!msg.whisper?.length,

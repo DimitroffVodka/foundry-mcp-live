@@ -15,6 +15,7 @@ import {
   extractDocRef
 } from "../lib/audit.js";
 import { relayRefusal } from "../lib/relay-guard.js";
+import { chatContent, forViewer, forViewerAt, pathTokens, removeSecrets } from "../lib/read-filter.js";
 import { accessRefusal, HANDLER_ACCESS, MUTATION_SETTING } from "../lib/handler-access.js";
 import {
   createChangeLog, describeEntry, isChangeStore, loadStored, OUTSIDE_THE_LOG, STORE_FLAG, STORE_OPTION, storeDelta,
@@ -447,7 +448,7 @@ function projectPath(obj, path) {
   //   - `[*]` / `[]` (wildcard)
   //   - `[N]` (numeric index)
   //   - any run of non-`.[]` chars (key)
-  const tokens = String(path).match(/\[[^\]]*\]|[^.\[\]]+/g) || [];
+  const tokens = pathTokens(path);
   return walk(obj, tokens);
 
   function walk(node, toks) {
@@ -495,6 +496,20 @@ function projectPath(obj, path) {
     if (node instanceof Map) return [...node.entries()];
     return node;
   }
+}
+
+// A document read as this client's user may see it (module/lib/read-filter.js):
+// non-owners lose unrevealed secrets; non-GMs lose other packages' flags unless
+// `params.flags`, and ownership maps shrink to their own entry.
+function viewerOf(doc, params = {}) {
+  return {
+    isGM: game.user.isGM, isOwner: doc?.isOwner === true, userId: game.user.id,
+    level: doc?.getUserLevel?.(game.user) ?? null,
+    keepFlags: params.flags === true || ["core", game.system.id],
+  };
+}
+function readAs(doc, data, params = {}) {
+  return forViewer(data, viewerOf(doc, params));
 }
 
 // Resolve a token reference (id, token name, or linked actor name) on a scene.
@@ -1343,7 +1358,7 @@ const handlers = {
           timestamp: m.timestamp,
           speaker: m.speaker?.alias ?? null,
           isRoll: m.isRoll,
-          contentPreview: String(m.content ?? "").slice(0, 120)
+          contentPreview: String(chatContent(m, game.user.isGM) ?? "").slice(0, 120)
         }));
       }),
       activeModules: _try("activeModules", () => {
@@ -1402,7 +1417,7 @@ const handlers = {
       ? game.actors.get(params.id)
       : game.actors.getName(params.name);
     if (!actor) return { error: `Actor not found: ${params.id || params.name}` };
-    return params.derived ? derivedView(actor) : actor.toObject();
+    return readAs(actor, params.derived ? derivedView(actor) : actor.toObject(), params);
   },
 
   /** Currently selected token's actor */
@@ -1417,7 +1432,7 @@ const handlers = {
         y: token.y,
         elevation: token.document.elevation
       },
-      actor: token.actor?.toObject() ?? null
+      actor: token.actor ? readAs(token.actor, token.actor.toObject()) : null
     };
   },
 
@@ -1470,7 +1485,7 @@ const handlers = {
       const docs = await pack.getDocuments({
         _id__in: results.map(r => r._id)
       });
-      return docs.map(d => d.toObject());
+      return docs.map(d => readAs(d, d.toObject()));
     }
 
     return results.slice(0, 50).map(e => ({
@@ -1498,7 +1513,7 @@ const handlers = {
     }
 
     if (!doc) return { error: `Document not found in ${params.pack}` };
-    return params.derived ? derivedView(doc) : doc.toObject();
+    return readAs(doc, params.derived ? derivedView(doc) : doc.toObject(), params);
   },
 
   /** List items (world-level) */
@@ -1521,7 +1536,7 @@ const handlers = {
       ? game.items.get(params.id)
       : game.items.getName(params.name);
     if (!item) return { error: `Item not found: ${params.id || params.name}` };
-    return params.derived ? derivedView(item) : item.toObject();
+    return readAs(item, params.derived ? derivedView(item) : item.toObject(), params);
   },
 
   /** Active Effects on a given actor */
@@ -1607,7 +1622,7 @@ const handlers = {
       ? collection.contents.filter(d => d.type === params.subtype)
       : collection.contents;
     const sample = candidates[0];
-    if (sample) return { _sampleFrom: sample.name, system: sample.toObject().system };
+    if (sample) return { _sampleFrom: sample.name, system: readAs(sample, { system: sample.toObject().system }).system };
 
     return { error: "No template or sample data found" };
   },
@@ -2099,7 +2114,7 @@ const handlers = {
         table: { id: table.id, name: table.name, uuid: table.uuid },
         roll: roll ? { formula: roll.formula, total: roll.total } : null,
         results: results.map(r => ({
-          id: r.id, name: r.name ?? r.text, description: strip(r.description) || undefined,
+          id: r.id, name: r.name ?? r.text, description: strip(r.isOwner ? r.description : removeSecrets(r.description)) || undefined,
           type: r.type, documentUuid: r.documentUuid ?? undefined, img: r.img,
           ...(r.parent && r.parent !== table ? { fromTable: r.parent.name } : {}),
         })),
@@ -2211,7 +2226,7 @@ const handlers = {
         id: actor.id,
         name: actor.name,
         type: actor.type,
-        system: actor.toObject().system,
+        system: readAs(actor, { system: actor.toObject().system }).system,
         statuses: Array.from(actor.statuses ?? []),
         effects: actor.effects.contents.map(e => ({ id: e.id, name: e.name, statuses: Array.from(e.statuses ?? []), disabled: e.disabled }))
       } : null
@@ -2644,12 +2659,14 @@ const handlers = {
         // Note: this path does NOT include derived data (effects-applied
         // values, prepareDerivedData patches) or getter-only properties
         // like `actor.statuses`. Pass an explicit `select` to get those.
-        out[actor.id] = { _name: actor.name, _full: actor.toObject() };
+        out[actor.id] = { _name: actor.name, _full: readAs(actor, actor.toObject()) };
       } else {
         // Walk the LIVE actor so projections capture derived data.
+        // Each path is filtered as if in place, so `flags.x` / `ownership.<id>` are too.
+        const viewer = viewerOf(actor);
         const proj = { _name: actor.name };
         for (const path of select) {
-          proj[path] = projectPath(actor, path);
+          proj[path] = forViewerAt(path, projectPath(actor, path), viewer);
         }
         out[actor.id] = proj;
       }
@@ -3374,17 +3391,22 @@ const handlers = {
     return {
       total: msgs.length,
       returned: slice.length,
-      messages: slice.map(m => ({
-        id: m.id,
-        timestamp: m.timestamp,
-        time: new Date(m.timestamp).toISOString(),
-        type: m.type,
-        speaker: m.speaker,
-        content: m.content,
-        isRoll: m.isRoll,
-        rolls: (m.rolls ?? []).map(r => ({ formula: r.formula, total: r.total, diceCount: r.dice?.length ?? 0 })),
-        whisperTo: (m.whisper ?? []).map(uid => game.users.get(uid)?.name ?? uid)
-      }))
+      messages: slice.map(m => {
+        // As this user's chat log shows it: secrets, blind rolls and others' whispers hidden.
+        const html = chatContent(m, game.user.isGM);
+        return {
+          id: m.id,
+          timestamp: m.timestamp,
+          time: new Date(m.timestamp).toISOString(),
+          type: m.type,
+          speaker: m.speaker,
+          content: html ?? "",
+          ...(html === null ? { contentHidden: true } : {}),
+          isRoll: m.isRoll,
+          rolls: html === null ? [] : (m.rolls ?? []).map(r => ({ formula: r.formula, total: r.total, diceCount: r.dice?.length ?? 0 })),
+          whisperTo: (m.whisper ?? []).map(uid => game.users.get(uid)?.name ?? uid)
+        };
+      })
     };
   },
 
@@ -3815,6 +3837,7 @@ const handlers = {
       if (!collection) return { sceneId: scene.id, type, count: 0, items: [] };
       items = collection.contents.map(doc => doc.toObject());
     }
+    items = readAs(scene, items);
 
     // Optional projection — caller passes dotted paths like "behaviors.type".
     // For arrays in the path, we map across each element. Drastically reduces
@@ -3922,7 +3945,8 @@ const handlers = {
         img:    it.img,
         // System data tends to be the most relevant for picking an item;
         // keep it but skip the document-level cruft.
-        system: it.system
+        // (a TypeDataModel serialises to its source via toJSON, as before)
+        system: readAs(actor, { system: it.system?.toJSON?.() ?? it.system }).system
       }))
     };
   },
@@ -4591,8 +4615,12 @@ const handlers = {
     return {
       total: changeLog.entries.length,
       stored: game.user.isGM ? "kept in a hidden journal; survives a reload of this tab" : "memory only (not a GM client)",
-      entries: list.slice(-Math.min(params.limit ?? 50, 200)).reverse()
-        .map(e => describeEntry(e, !!params.entryId)),
+      entries: list.slice(-Math.min(params.limit ?? 50, 200)).reverse().map(e => {
+        if (!params.entryId) return describeEntry(e);
+        // Snapshots are document sources: filtered like any read (a deleted document counts as not owned).
+        const doc = fromUuidSync(e.uuid), d = describeEntry(e, true);
+        return { ...d, before: readAs(doc, d.before), after: readAs(doc, d.after) };
+      }),
       neverLogged: OUTSIDE_THE_LOG,
     };
   },
