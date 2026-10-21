@@ -118,7 +118,7 @@ function wallScene() {
 }
 
 // v14 tests walls per Level (polygon config.level, which core defaults to canvas.level); v13 has no Levels.
-function wallLevel(scene, ref, token) {
+export function wallLevel(scene, ref, token) {
   if (ref !== undefined) {
     const level = scene.levels?.get(ref) ?? scene.levels?.getName?.(ref);
     if (!level) throw new Error(`level "${ref}" is not a Level of scene "${scene.name}"`);
