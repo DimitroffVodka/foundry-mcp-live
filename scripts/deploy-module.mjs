@@ -78,7 +78,8 @@ export function deployModule({ target, dev = false, sourceDir = MODULE_DIR, stag
   for (const root of roots) {
     const from = path.join(sourceDir, root);
     if (!existsSync(from)) continue;
-    cpSync(from, path.join(stageDir, root), { recursive: true, filter: src => !src.endsWith(".bak") });
+    // Same exclusions as the hash (bar build-info.js, which must ship).
+    cpSync(from, path.join(stageDir, root), { recursive: true, filter: src => !src.endsWith(".bak") && !path.basename(src).startsWith(".") });
   }
 
   // Anything under module/ the manifest does not reach would never ship; say so

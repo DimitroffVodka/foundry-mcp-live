@@ -1,0 +1,16 @@
+# module/ is hashed (server/lib/module-hash.js); keep its text files LF on
+# every checkout so a Windows clone matches the committed stamp. The hash also
+# normalises CRLF for these extensions; keep both lists in step. Anything else
+# (images, fonts) is left to git's binary detection.
+module/**/*.js text eol=lf
+module/**/*.mjs text eol=lf
+module/**/*.cjs text eol=lf
+module/**/*.json text eol=lf
+module/**/*.css text eol=lf
+module/**/*.html text eol=lf
+module/**/*.hbs text eol=lf
+module/**/*.md text eol=lf
+module/**/*.txt text eol=lf
+module/**/*.svg text eol=lf
+module/**/*.yml text eol=lf
+module/**/*.yaml text eol=lf

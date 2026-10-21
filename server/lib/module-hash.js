@@ -18,7 +18,13 @@ import path from "node:path";
 // Holds the hash, so it cannot be part of it.
 export const BUILD_INFO_PATH = "scripts/build-info.js";
 
-const excluded = (rel) => rel === BUILD_INFO_PATH || rel.endsWith(".bak");
+// Hidden paths (.DS_Store, .git/, editor state) are local noise, never shipped.
+const excluded =(rel) => rel === BUILD_INFO_PATH || rel.endsWith(".bak")
+  || rel.split("/").some(seg => seg.startsWith("."));
+
+// Hashed with CRLF → LF so a core.autocrlf=true checkout matches the LF stamp.
+// Keep in step with the eol=lf list in .gitattributes.
+const TEXT_FILE = /\.(js|mjs|cjs|json|css|html|hbs|md|txt|svg|yml|yaml)$/i;
 
 /** Every hashed file under `dir`, as sorted POSIX relative paths. */
 export function moduleFiles(dir) {
@@ -29,14 +35,17 @@ export function moduleFiles(dir) {
 }
 
 /**
- * SHA-256 hex over every file under `dir` except build-info.js and *.bak:
- * for each sorted relative path, the path, a NUL, the byte length, a NUL,
- * then the bytes. The length keeps file boundaries unambiguous.
+ * SHA-256 hex over every file under `dir` except build-info.js, *.bak and
+ * hidden paths: for each sorted relative path, the path, a NUL, the byte
+ * length, a NUL, then the bytes (text files with CRLF → LF). The length keeps
+ * file boundaries unambiguous.
  */
 export function hashModuleTree(dir) {
   const h = createHash("sha256");
   for (const rel of moduleFiles(dir)) {
-    const bytes = readFileSync(path.join(dir, rel));
+    let bytes = readFileSync(path.join(dir, rel));
+    // latin1 round-trips every byte, so only the CRs change.
+    if (TEXT_FILE.test(rel)) bytes = Buffer.from(bytes.toString("latin1").replaceAll("\r\n", "\n"), "latin1");
     h.update(`${rel}\0${bytes.length}\0`);
     h.update(bytes);
   }

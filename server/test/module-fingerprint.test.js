@@ -47,6 +47,30 @@ test("hash ignores build-info.js and *.bak, but sees content and paths", () => {
   assert.notEqual(hashModuleTree(a), hashModuleTree(b));
 });
 
+test("hash treats a CRLF checkout of text files like LF, but not binary files", () => {
+  const lf = tmp(); write(lf, "scripts/a.js", "a\nb\n"); write(lf, "module.json", "{\n}\n");
+  const crlf = tmp(); write(crlf, "scripts/a.js", "a\r\nb\r\n"); write(crlf, "module.json", "{\r\n}\r\n");
+  assert.equal(hashModuleTree(crlf), hashModuleTree(lf));
+
+  const png = tmp(); write(png, "art/x.png", Buffer.from([0x89, 0x0d, 0x0a, 0x1a]));
+  const stripped = tmp(); write(stripped, "art/x.png", Buffer.from([0x89, 0x0a, 0x1a]));
+  assert.notEqual(hashModuleTree(png), hashModuleTree(stripped));
+});
+
+test("hash ignores hidden files and dirs, and deploy does not ship them", () => {
+  const dir = fakeModule();
+  const base = hashModuleTree(dir);
+  write(dir, ".DS_Store", "finder");
+  write(dir, "scripts/.DS_Store", "finder");
+  write(dir, ".cache/x.js", "x");
+  assert.equal(hashModuleTree(dir), base);
+  assert.equal(checkStamp(dir), null);
+
+  const target = path.join(tmp(), "foundry-mcp-live");
+  assert.equal(deploy({ sourceDir: dir, target }).targetHash, base);
+  assert.ok(!existsSync(path.join(target, "scripts/.DS_Store")));
+});
+
 test("moduleFingerprint reports both hashes only when they differ", () => {
   assert.deepEqual(moduleFingerprint("abc", "abc"), { moduleStale: false });
   assert.deepEqual(moduleFingerprint("old", "abc"), { moduleStale: true, moduleHash: "old", serverModuleHash: "abc" });
