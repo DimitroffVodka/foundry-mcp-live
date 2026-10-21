@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { createEventLog, chatEvent, eventMatcher, requestAsk, stage, waitDialog }
   from "../../module/scripts/live-play.js";
+import { accessRefusal } from "../../module/lib/handler-access.js";
 
 // ---------------------------------------------------------------------------
 // Event log
@@ -159,7 +160,7 @@ function collection(docs) {
   return c;
 }
 
-function stageStub({ mutations = true } = {}) {
+function stageStub() {
   const emitted = [];
   const users = [
     { id: "gm", name: "GM", active: true },
@@ -173,7 +174,6 @@ function stageStub({ mutations = true } = {}) {
     users: collection(users),
     scenes: collection([{ id: "s1", name: "Cave" }]),
     socket: { emit: (...a) => emitted.push(a) },
-    settings: { get: () => mutations },
     togglePause(p, opts) { this.pausedWith = opts; this.paused = p; return p; },
   };
   game.user.isGM = true;
@@ -204,10 +204,8 @@ test("stage: unknown action, unknown user, and the read-only toggle all refuse",
     await assert.rejects(stage({ action: "nope" }), /Unknown stage action/);
     await assert.rejects(stage({ action: "pullToScene", scene: "Cave", users: ["Zed"] }), /User "Zed" not found/);
   } finally { f.restore(); }
-  const g = stageStub({ mutations: false });
-  try {
-    await assert.rejects(stage({ action: "pause" }), /World mutations are disabled/);
-  } finally { g.restore(); }
+  // the toggle is enforced by bridge.js dispatch(), from stage's declared access
+  assert.match(accessRefusal("stage", () => false), /"Allow AI to modify the world".* is off/);
 });
 
 // ---------------------------------------------------------------------------

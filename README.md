@@ -177,6 +177,15 @@ Confirm with `claude mcp list` — should show `foundry-vtt: http://127.0.0.1:30
 
 (Stdio fallback via `proxy.mjs` also works if you prefer: `claude mcp add foundry-vtt -- node /absolute/path/to/server/proxy.mjs`.)
 
+**Or install the Claude Code plugin**, which adds the same connection plus two skills (`foundry-live`: how to start a session against a live world; `foundry-test`: choosing and writing tests for a Foundry module):
+
+```
+/plugin marketplace add DimitroffVodka/foundry-mcp-live
+/plugin install foundry-mcp-live@foundry-mcp-live
+```
+
+The plugin only connects; it does not start the server, so steps 1–3 still apply. It points at `http://127.0.0.1:3000/mcp`; set `FOUNDRY_MCP_URL` before starting Claude Code to use another address, and `FOUNDRY_MCP_TOKEN` if the server has `BRIDGE_TOKEN` set. If you already added the server with `claude mcp add` at the same URL, Claude Code keeps that entry and skips the plugin's copy, so the tools are not listed twice.
+
 #### Codex CLI
 
 Edit `~/.codex/config.toml`:
@@ -451,7 +460,7 @@ to be running, since the bridge is what is under test.
 
 ## Releasing a new version
 
-1. Bump `version` in [module/module.json](module/module.json) and [server/package.json](server/package.json), and refresh both root `version` fields in `server/package-lock.json` (top level and `packages[""]`). `server.js` needs no edit — `SERVER_VERSION` is read from `package.json` at startup. Move the `## [Unreleased]` entries in [CHANGELOG.md](CHANGELOG.md) under a dated `## [x.y.z]` heading.
+1. Bump `version` in [module/module.json](module/module.json), [server/package.json](server/package.json) and the Claude Code plugin's [plugin.json](plugins/foundry-mcp-live/.claude-plugin/plugin.json) (CI fails if the three disagree), and refresh both root `version` fields in `server/package-lock.json` (top level and `packages[""]`). `server.js` needs no edit — `SERVER_VERSION` is read from `package.json` at startup. Move the `## [Unreleased]` entries in [CHANGELOG.md](CHANGELOG.md) under a dated `## [x.y.z]` heading.
 2. Commit, then tag and push: `git tag v1.0.1 && git push --tags`. A tag with a pre-release suffix (`v1.1.0-beta.1`) publishes as a GitHub pre-release and stays out of `releases/latest`, so it never offers itself as an update to stable installs — which also means nobody gets it unless they install its versioned manifest by hand.
 3. The [release workflow](.github/workflows/release.yml) builds `module.zip` and publishes a GitHub Release with `module.json` + `module.zip` attached. The manifest URL `releases/latest/download/module.json` then points at the new version automatically, so Foundry's update check picks it up.
 

@@ -123,14 +123,11 @@ test("create: a multi-level scene needs level or levels; level names resolve; th
   assert.equal(r.callId, "gm-abc");
 });
 
-test("create: type, size and read-only gates", async () => {
+test("create: type and size gates (the read-only toggle is dispatch's, see handler-access.test.js)", async () => {
   fakeWorld();
   await assert.rejects(placeable({ action: "create", type: "Token", entries: [{}] }), /type must be one of/);
   await assert.rejects(placeable({ action: "create", type: "Wall", entries: Array(201).fill({ c: [0, 0, 1, 1] }) }), /at most 200/);
   await assert.rejects(placeable({ action: "create", type: "Wall", entries: [] }), /non-empty entries/);
-  const { writes } = fakeWorld({ allowMutations: false });
-  await assert.rejects(placeable({ action: "create", type: "Wall", entries: [{ c: [0, 0, 1, 1] }] }), /World mutations are disabled/);
-  assert.equal(writes.length, 0);
 });
 
 test("update: a missing _id or invalid change writes nothing; changes are read back", async () => {

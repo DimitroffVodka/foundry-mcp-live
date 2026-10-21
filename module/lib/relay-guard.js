@@ -32,7 +32,7 @@ export const RELAY_TOOLS = new Set([
   "get_actor_items", "set_canvas_level", "update_scene", "activate_scene", "list_scenes",
   "create_scene", "delete_scene", "call_module_api", "query_grid",
   "list_journals", "get_journal", "draw_table", "stage", "events_read", "events_wait",
-  "request_ask", "placeable",
+  "request_ask", "changes_list", "changes_undo", "placeable",
 ]);
 
 /**

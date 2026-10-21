@@ -30,9 +30,13 @@ Every tool that modifies the Foundry world (creates, updates, or deletes documen
 - **`audit.before`** — snapshot of the affected document(s) *before* the change.
 - **`audit.after`** — snapshot *after* the change.
 - **`audit.diff`** — structured delta of what actually changed. Noisy metadata (timestamps, stats, IDs) is automatically filtered.
-- **`audit.undo`** — dry instructions for how to revert the change (e.g. rollback data or a delete command).
+- **`audit.undo`** — dry instructions for how to revert the change (e.g. rollback data or a delete command). To actually revert it, use [`changes`](#changes): every write call is logged there whether or not `audit` was set.
 
 **Efficiency Note:** Full snapshots are limited to 10 documents per call to keep context window usage low. If more are affected, the audit will note the truncation. Use this to self-verify your work in an **Act -> Validate** loop.
+
+### Read-only toggle
+
+Every bridge handler declares its access — `read`, `write` or `delete` — in `module/lib/handler-access.js`, and the bridge's single dispatcher checks it before any handler runs, on the direct and the relay path alike. A handler with no declaration is refused as unknown (a test fails when one is missing). `write` and `delete` handlers run only while the world setting **"Allow AI to modify the world"** (`foundry-mcp-live.allowWorldMutations`, default on) is exactly `true`; when it is off, unreadable, or holds anything else, they are refused with a message naming that setting. `write` includes everything that can change the world or other people's screens: chat, rolls posted to chat, dialogs, UI clicks, `evaluate` and `call_module_api`.
 
 The server-local tools are `list_connected_bridges`, `bridge_status`,
 `reload_foundry`, and the opt-in `relaunch_client`. They inspect or
@@ -335,6 +339,21 @@ Chat log access. The `action` discriminator selects the operation.
 
 ---
 
+## Change log
+
+### `changes`
+The routed client's log of every document a write call created, updated or deleted, with undo. Always registered; `undo` writes, so it respects the read-only toggle.
+
+- **Discriminator**: `action` — `"list"` or `"undo"`.
+- **What is logged**: while a handler declared `write`/`delete` runs (see [Read-only toggle](#read-only-toggle)), each document create/update/delete that browser asks for is one entry `{ id, callId, tool, time, action, documentName, uuid, name, parentUuid, pack, changed, undoable, reason, undoneBy? }` with the document source before and after. Each bridge tab has its own log of its last 200 entries. On a GM client the log is also stored in one hidden JournalEntry ("MCP change log (do not edit)", default ownership None, flagged `flags.foundry-mcp-live.changeStore`; `list` and `document` never show it), so it survives a reload of that tab: the tab's id lives in its `sessionStorage`, and the tab reloads its own log at `ready` with ids continuing where they stopped. The store holds 200 entries and 5,000,000 characters in total across tabs, oldest pruned first, and is written at most once a second (a change in the last second before a reload can be lost). A new tab or a relaunched browser starts an empty log; older tabs' entries stay in the store until pruned. On a player's bridge the log is memory only. **Players can read the store**: Foundry sends every world JournalEntry to every client when it joins, whatever its ownership, so the snapshots (including of documents since deleted) reach players' browsers even though their sidebar never shows it.
+- **`action: "list"`** — newest first. Params: `callId?`, `uuid?`, `limit?` (default 50, max 200); `entryId?` returns that one entry with its full `before`/`after`. Returns `{ total, stored, entries, neverLogged }`; `stored` says whether this client keeps the log across reloads.
+- **`action: "undo"`** — `entryId` undoes one entry, `callId` every entry of one call, neither the latest call. Before writing anything every step is checked: the entry is undoable; the user may do the reverse action, and changes made by `FOUNDRY_MCP_ALLOW_WRITE` tools need that gate on now; no drift — no later entry on the same document, `_stats.modifiedTime` unchanged, and the document still equal to the recorded `after`. Any problem refuses the whole undo: `{ ok: false, problems, wouldRun }`, nothing written. Otherwise each document goes back to its state before the earliest selected entry: updates are restored field by field (old values set, added keys removed with `-=`; embedded collections are their own entries), created documents are deleted, deleted ones recreated with `keepId`, newest first, and each step is read back: `{ ok: true, undoCallId, applied: [{ op, uuid, entries, fields?, readBack }] }`. The undo is itself a logged call, so undoing it redoes.
+- **Interrupted undo**: if a step fails, the steps before it stay applied and are marked undone; the failure result's `retry` (`{ callId }` or `{ entryId }` of the original selection) resumes, skipping them. Do not retry with no ids: the applied steps are logged under the undo's own call, so that would undo the undo. An undo whose entries are all undone already is refused (undo that undo call to put things back).
+- **Never undone**: chat messages, settings, users, macros (they are code) — undoing a whole call leaves these alone and lists them in `leftAlone`; one selected by `entryId` is refused — documents over the 200,000-character snapshot cap, and changes made while another write call was running on the same client (which call made them is uncertain). **Never logged**: pause, targeting, canvas view and level, dialogs and clicks on other screens, sounds, uploaded files, dice already rolled, `evaluate` jobs that finish after their call returns, changes from another browser tab, and anything before the tab first loaded the world (on a player's bridge, before its last reload).
+- A human editing in the bridge's own browser while a long call runs (for example `request` waiting for a player) is logged under that call; check `list` before undoing a call that waited on people.
+
+---
+
 ## Requests (interactive, routed to a user's screen)
 
 ### `request`
@@ -563,7 +582,7 @@ Author scene placeables — walls, lights, sounds, tiles, drawings, regions, map
 - **All-or-nothing**: every entry is validated by Foundry's own data model (a throwaway construction for create, `updateSource` on a clone for update) before anything is written. One bad entry → nothing written, and the error names each bad entry by index.
 - **Read-back**: the result's `storedDifferently` lists `{index, id, field, sent, stored}` for every sent field Foundry stored differently — rounded wall coordinates, clamped volumes, and so on. Absent when everything stored as sent. If another module's `preCreate` hook vetoes some documents, the rest are still created and `notCreated` lists the vetoed entries' indexes (`created` counts only what exists) — do not retry the whole call.
 - **Plain words on walls** (case-insensitive; CONST numbers also accepted): `door` none/door/secret, `ds` closed/open/locked, `move` none/normal, `sight`/`light`/`sound` none/limited/normal/proximity/distance, `dir` both/left/right.
-- **`delete`** — `ids` (1–200), or `createdByMcp: true` for every document of that `type` this tool created, or `callId` for exactly what one create call made — `ids` together with `createdByMcp`/`callId` is refused. `dryRun: true` lists what would go (`{id, label}`) and deletes nothing — use it first. Any unknown id → nothing deleted. Permanent.
+- **`delete`** — `ids` (1–200), or `createdByMcp: true` for every document of that `type` this tool created, or `callId` for exactly what one create call made — `ids` together with `createdByMcp`/`callId` is refused. `dryRun: true` lists what would go (`{id, label}`) and deletes nothing — use it first. Any unknown id → nothing deleted. Undo with [`changes`](#changes) while it is in the change log.
 - **`door`** — `ids` (door walls) + `state` `"open"`/`"closed"`/`"locked"`. A non-door wall in the list → nothing written.
 - **Relay**: over the relay, Region `executeScript`/`executeMacro` behaviors (and behavior `system.source` updates) are refused unless the world allows evaluate over the relay — the same stored-code check every relayed write gets.
 - **Free text** (Note `text`, Drawing `text`, names) is stored as given; Foundry draws these as plain canvas labels and does not enrich them, so `@UUID`/`[[roll]]` syntax in them is inert.

@@ -1,0 +1,16 @@
+{
+  "name": "foundry-mcp-live",
+  "description": "Claude Code plugin for Foundry MCP Live: connects to a running foundry-mcp-live server and adds Foundry skills.",
+  "owner": {
+    "name": "DimitroffVodka",
+    "url": "https://github.com/DimitroffVodka"
+  },
+  "plugins": [
+    {
+      "name": "foundry-mcp-live",
+      "source": "./plugins/foundry-mcp-live",
+      "description": "Connects Claude Code to a running foundry-mcp-live server (a live Foundry VTT world) and adds skills for driving and testing it.",
+      "category": "development"
+    }
+  ]
+}

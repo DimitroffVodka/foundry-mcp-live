@@ -1,0 +1,13 @@
+{
+  "name": "foundry-mcp-live",
+  "version": "1.0.0",
+  "description": "Connects Claude Code to a running foundry-mcp-live server (a live Foundry VTT world) and adds skills for driving and testing it. Does not start the server.",
+  "author": {
+    "name": "DimitroffVodka",
+    "url": "https://github.com/DimitroffVodka"
+  },
+  "homepage": "https://github.com/DimitroffVodka/foundry-mcp-live",
+  "repository": "https://github.com/DimitroffVodka/foundry-mcp-live",
+  "license": "MIT",
+  "keywords": ["foundry-vtt", "foundryvtt", "mcp", "ttrpg"]
+}

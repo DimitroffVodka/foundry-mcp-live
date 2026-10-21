@@ -12,7 +12,8 @@
  *                      (flags.foundry-mcp-live.callId); dryRun lists them.
  *   door             — set walls' door state open/closed/locked.
  *
- * Writes go through runAuditedMutation (world read-only toggle + audit). The
+ * Writes go through runAuditedMutation (audit); the read-only toggle is enforced
+ * by bridge.js dispatch() via lib/handler-access.js. The
  * relay's stored-code check (lib/relay-guard.js findStoredCode) sees these
  * params like any other relayed call, so Region executeScript/executeMacro
  * behaviors are refused over the relay unless the world allows evaluate.

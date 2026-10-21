@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { SERVER_INSTRUCTIONS } from "../lib/server-instructions.js";
@@ -76,7 +76,23 @@ const DOCS = [
   { label: "README.md", text: readFileSync(fileURLToPath(new URL("../../README.md", import.meta.url)), "utf8"), minKnown: 20 },
   // server/TOOLS.md is deliberately excluded: its "Merges the old X" notes name
   // dead tools on purpose. docs-tool-coverage.test.js guards it instead.
+  // The Claude Code plugin's skills are copied into users' sessions, so a stale
+  // name there misleads an agent the same way AGENTS.md would.
+  { label: "plugin skill foundry-live", text: pluginSkill("foundry-live"), minKnown: 10 },
+  // foundry-test also names action values, JS globals and Playwright MCP tools.
+  { label: "plugin skill foundry-test", text: pluginSkill("foundry-test"), minKnown: 10, nonTools: new Set([
+    "hooks", "socket", "workflow", "take", "diff", "dialog", "placeables", "module",
+    "game", "foundry", "canvas", "ui", "this", "before", "after", "import", "compatibility",
+    "fvtt", "unpack", "pack", "browser_evaluate", "browser_snapshot", "browser_tabs",
+  ]) },
 ];
+
+// A skill's SKILL.md plus any references/*.md, as one text.
+function pluginSkill(name) {
+  const dir = fileURLToPath(new URL(`../../plugins/foundry-mcp-live/skills/${name}/`, import.meta.url));
+  const refs = existsSync(dir + "references") ? readdirSync(dir + "references").filter((f) => f.endsWith(".md")).map((f) => "references/" + f) : [];
+  return ["SKILL.md", ...refs].map((f) => readFileSync(dir + f, "utf8")).join("\n");
+}
 
 test("tool registrations parse to a plausible set (guards a broken regex)", () => {
   assert.ok(REGISTERED.size >= 30, `only parsed ${REGISTERED.size} tools — registration regex likely drifted`);
@@ -99,7 +115,7 @@ for (const doc of DOCS) {
     );
 
     const unknown = candidates.filter(
-      (t) => !REGISTERED.has(t) && !NON_TOOL_IDENTIFIERS.has(t.toLowerCase())
+      (t) => !REGISTERED.has(t) && !NON_TOOL_IDENTIFIERS.has(t.toLowerCase()) && !doc.nonTools?.has(t)
     );
     assert.deepEqual(
       unknown,
