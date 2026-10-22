@@ -38,6 +38,7 @@ import {
   sealToGateway,
   createReplayGuard,
 } from "./relay-crypto.js";
+import { relayAnnouncement } from "./relay-announce.js";
 
 const MODULE_ID = "foundry-mcp-live";
 const CHANNEL = `module.${MODULE_ID}`;
@@ -47,6 +48,18 @@ const HEARTBEAT_MS = 5_000;
 const PRESENCE_TTL_MS = 15_000;
 /** Sealed results above this are refused rather than broadcast to every client. */
 const MAX_RESULT_BYTES = 512 * 1024;
+
+/**
+ * How long to let the direct bridge settle before concluding this device is
+ * relay-only. The bridge dials during the `ready` hook and is still CONNECTING
+ * for the first moments of a world load, so a bridged device evaluated too
+ * early looks relay-only — which is how a perfectly healthy desktop came to be
+ * warned that nothing could reach it.
+ */
+const BRIDGE_SETTLE_MS = 2_000;
+
+/** sessionStorage prefix: the world-load notice is a once-per-session event. */
+const NOTICE_SEEN_PREFIX = `${MODULE_ID}:relay-notice:`;
 
 let state = null;
 
@@ -337,25 +350,90 @@ export function teardownRelay() {
   state = null;
 }
 
-export function startRelay() {
+/**
+ * @param {object} [opts]
+ * @param {() => boolean} [opts.isDirectlyBridged]
+ *   Whether this client's direct bridge socket is open. Injected from bridge.js
+ *   (relay.js deliberately does not import it) purely so the world-load notice
+ *   can tell "reachable the ordinary way" from "relay-only".
+ */
+export function startRelay({ isDirectlyBridged = () => false } = {}) {
   startHeartbeat();
-
-  // The direct bridge pops a toast when its socket opens. The relay showed
-  // nothing at all, so on a device that can only ever be relayed (a Deck, a
-  // tablet) there was no signal it was working — the absence of the familiar
-  // toast read as "not connected". Announce it, and name the device so it can
-  // be matched against the target list.
-  const label = `${game.user?.name ?? "?"} — ${describeClient()}`;
-  loadGatewayKeys().then((ready) => {
-    if (ready) {
-      ui.notifications?.info(`Foundry MCP: this device is available to the MCP server as "${label}".`);
-    } else {
-      ui.notifications?.warn(
-        `Foundry MCP: relay active on this device ("${label}") but no MCP gateway is running for this world yet. ` +
-        `It becomes reachable once the server's gateway connects.`
-      );
-    }
-  }).catch(() => {});
+  announceRelayStatus(isDirectlyBridged).catch(reportError);
 
   return { clientId: state.clientId, bootId: state.bootId };
+}
+
+/**
+ * Tell the user where this device stands — but only when that is news.
+ *
+ * The direct bridge pops a toast when its socket opens. The relay showed
+ * nothing at all, so on a device that can only ever be relayed (a Deck, a
+ * tablet) there was no signal it was working — the absence of the familiar
+ * toast read as "not connected". Announce it there, and name the device so it
+ * can be matched against the target list.
+ *
+ * Everywhere else, say nothing. The relay runs on every client by design, so
+ * announcing on every client meant a world whose gateway lives elsewhere warned
+ * "no MCP gateway is running for this world yet" at every world load — on a
+ * desktop the MCP server was already driving through the direct bridge.
+ * `relayAnnouncement` decides what is worth saying; the session guard below
+ * decides whether it still needs saying at all.
+ */
+async function announceRelayStatus(isDirectlyBridged) {
+  const enabled = noticeEnabled();
+  const gatewayReady = enabled ? await loadGatewayKeys() : false;
+  if (enabled && !gatewayReady) await settleDirectBridge();
+
+  const notice = relayAnnouncement({
+    enabled,
+    gatewayReady,
+    directBridgeOpen: bridgeIsOpen(isDirectlyBridged),
+    label: `${game.user?.name ?? "?"} — ${describeClient()}`,
+  });
+
+  if (!notice) {
+    console.debug(
+      `${MODULE_ID} | relay: no relay notice for this client ` +
+      `(gateway ${gatewayReady ? "published" : "absent"}, notices ${enabled ? "on" : "off"}).`
+    );
+    return;
+  }
+  if (alreadyNoticed(notice.level)) return;
+
+  if (notice.level === "info") ui.notifications?.info(notice.text);
+  else ui.notifications?.warn(notice.text);
+}
+
+/** The notice is advisory: a missing or odd setting must never break the relay. */
+function noticeEnabled() {
+  try { return game.settings.get(MODULE_ID, "relayAnnounce") !== false; }
+  catch { return true; }
+}
+
+function bridgeIsOpen(isDirectlyBridged) {
+  try { return !!isDirectlyBridged(); } catch { return false; }
+}
+
+function settleDirectBridge() {
+  return new Promise((resolve) => setTimeout(resolve, BRIDGE_SETTLE_MS));
+}
+
+/** In-memory half of the once-per-session guard (storage may be unavailable). */
+const noticedThisSession = new Set();
+
+/**
+ * Per browser session, not per page load: reloading Foundry keeps the session,
+ * so re-entering a world does not re-announce. Keyed by level, so a device that
+ * was warned and later becomes announceable still hears about it once.
+ */
+function alreadyNoticed(level) {
+  if (noticedThisSession.has(level)) return true;
+  noticedThisSession.add(level);
+  try {
+    const key = `${NOTICE_SEEN_PREFIX}${level}`;
+    if (sessionStorage.getItem(key)) return true;
+    sessionStorage.setItem(key, "1");
+  } catch { /* storage blocked — the in-memory set still dedupes this page */ }
+  return false;
 }
