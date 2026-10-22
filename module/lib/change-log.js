@@ -329,8 +329,18 @@ export function changedPaths(a, b, skip = []) {
 }
 
 /**
+ * The update key and value that delete `key` under the dotted `path` ("" for top level).
+ * V14 deprecates the `-=key: null` form (removed in 16) for its ForcedDeletion operator; V13 has only `-=`.
+ */
+export function forcedDeletion(path, key) {
+  const Del = globalThis.foundry?.data?.operators?.ForcedDeletion;
+  const prefix = path ? `${path}.` : "";
+  return Del ? [prefix + key, new Del()] : [`${prefix}-=${key}`, null];
+}
+
+/**
  * The update that takes `current` back to `target` field by field: old values
- * set again, keys that were added removed with Foundry's `-=` syntax. Top-level
+ * set again, keys that were added removed with forcedDeletion(). Top-level
  * `skip` keys (embedded collections, _stats) are left alone.
  */
 export function restoreUpdate(target, current, skip = ["_stats"]) {
@@ -346,7 +356,10 @@ export function restoreUpdate(target, current, skip = ["_stats"]) {
     for (let i = 1; i <= parts.length; i++) {
       const p = at(t, parts.slice(0, i));
       if (p.found && isObj(p.value)) continue;
-      if (!p.found) update[[...parts.slice(0, i - 1), `-=${parts[i - 1]}`].join(".")] = null;
+      if (!p.found) {
+        const [key, value] = forcedDeletion(parts.slice(0, i - 1).join("."), parts[i - 1]);
+        update[key] = value;
+      }
       break; // a non-object in target is set wholesale above
     }
   }
