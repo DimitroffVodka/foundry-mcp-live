@@ -185,7 +185,7 @@ Confirm with `claude mcp list` — should show `foundry-vtt: http://127.0.0.1:30
 
 (Stdio fallback via `proxy.mjs` also works if you prefer: `claude mcp add foundry-vtt -- node /absolute/path/to/server/proxy.mjs`.)
 
-**Or install the Claude Code plugin**, which adds the same connection plus two skills (`foundry-live`: how to start a session against a live world; `foundry-test`: choosing and writing tests for a Foundry module):
+**Or install the Claude Code plugin**, which adds the same connection plus three skills (`foundry-live`: how to start a session against a live world; `foundry-test`: choosing and writing tests for a Foundry module; `foundry-v14`: the V14 API changes that break or warn in older module code, and keeping V13 support):
 
 ```
 /plugin marketplace add DimitroffVodka/foundry-mcp-live
