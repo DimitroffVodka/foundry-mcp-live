@@ -510,6 +510,37 @@ Open a design-harness fixture as a **real window inside a live Foundry client** 
 - **Returns**: a PNG screenshot of the open window plus a text line (target client, capture method, missing string keys if any). CDP only captures a debugger page logged in as the routed client's user; otherwise the reply says `html2canvas fallback` and why CDP was skipped. A screenshot failure still leaves the window open and says so. Nothing is persisted; no world documents change.
 - **How it reaches the client**: the compiled markup and CSS go to the module's `design_preview` handler as **data** — no `evaluate`, so it works with `FOUNDRY_MCP_ALLOW_EVAL=0` and over a relayed client. The markup reaches `DialogV2` as a string, which Foundry runs through `cleanHTML` (no script, no event-handler attributes). It is a transient UI window: no world document is touched, so it is not behind the read-only toggle. **Needs the current `module/` deployed to Foundry** (the install is a copy: copy `module/` to `Data/modules/foundry-mcp-live` and reload the client); a module that predates the handler answers `Unknown tool`, and the server then falls back to driving the same steps through `evaluate` when the eval gate allows it, or says what to deploy.
 
+### `ui_test` (server-local; present when the ui-test harness is installed)
+Browser-level **Playwright tests for any Foundry module**, run in a **throwaway Foundry sandbox**, never the live world. The live instance is only read from: its `Config/license.json` is copied and its installed system (and the modules the module under test hard-requires) are staged in.
+
+A sandbox is a second Foundry process from the installed app (`FOUNDRY_APP`, default `~/FoundryV14/app`; node from `FOUNDRY_NODE`, default the server's) with its own dataPath under `tools/ui-test/.cache/sandboxes/sbx-<port>` (gitignored; `FOUNDRY_UI_TEST_CACHE` overrides), its own port in **30700–30799**, **bound to 127.0.0.1**, and one world `ui-test` built offline: `world.json` for the system plus a seeded `core.moduleConfiguration` enabling the module and its required modules. Foundry seeds a passwordless **Gamemaster** on first launch. Packages are staged as symlinks to their top-level entries, except `packs/`, which is copied (Foundry writes into compendium LevelDBs). There is no admin password, so foundry-playwright's setup-screen flows (`useFoundry`, `useBaseWorld`) are not used: isolation is a fresh sandbox per run.
+
+Specs live in the **module repo** at `e2e/*.spec.{mjs,js,ts}` and import the harness:
+
+```js
+import { test, expect } from "@foundry-mcp-live/ui-test";
+test("sheet renders", async ({ page, foundry }) => {
+  await foundry.state.createTestActor("Hero");          // system adapter: shadowdark, dnd5e, pf2e
+  await page.evaluate(() => game.actors.getName("Hero").sheet.render(true));
+  await expect(page.locator('.window-app .navigation-tab[data-tab="tab-inventory"]')).toBeVisible(); // Shadowdark sheet
+});
+```
+
+`test` is [foundry-playwright](https://github.com/TheFehr/foundry-playwright)'s (console monitoring, tour suppression, `foundry.state/ui/canvas`) plus an auto fixture that joins as `user` (default `"Gamemaster"`; `test.use({ user: null })` to start on a blank page). Everything foundry-playwright exports is re-exported. A run copies the specs into the harness so they resolve its Playwright; result paths point back at the module checkout. Tests run one at a time (one world, one GM). System state adapters: `shadowdark` (here, `tools/ui-test/adapters/`), `dnd5e` and `pf2e` (from the library); register others in `tools/ui-test/index.mjs`.
+
+Same thing from a shell: `node tools/ui-test/run.mjs --module <dir> [--system <id>] [--grep <re>] [--keep]`.
+
+- **Params**:
+  - `action` — `"run"`, `"status"`, `"start"` or `"stop"`.
+  - `module?` — [run, start] absolute path to the module checkout.
+  - `system?` — [run, start] game system id installed in the live Foundry; default: the module's first `relationships.systems` entry.
+  - `grep?` — [run] only tests whose title matches.
+  - `sandbox?` — [run] reuse a running sandbox (left running); [stop] the sandbox to stop.
+  - `keep?` — [run] leave the sandbox the run started running.
+  - `runId?`, `waitMs?` — [status] the run to report, and how long to wait for it (≤ 40000).
+- **Returns**: `run` returns `{runId, status: "running"}` at once (the run takes a minute or more; it continues in the background, outliving the MCP call). `status {runId}` returns `{status: "done", ok, passed, failed, skipped, tests: [{title, file, status, durationMs, error?, attachments: [screenshot/trace/error-context paths]}], errors, sandbox}` once finished, else `{status: "running"|"died", logTail}`. `status` with no runId lists sandboxes and the 10 latest runs. `start` returns the sandbox record (`url`, `id`, `dataPath`); `stop` kills it (SIGINT, then SIGKILL) and deletes its dataPath.
+- **Install**: `cd tools/ui-test && npm ci`. Browser: `/usr/bin/chromium` when present (`FOUNDRY_CHROME_PATH` overrides), else Playwright's own (`npx playwright install chromium`).
+
 ---
 
 ## Dice & items

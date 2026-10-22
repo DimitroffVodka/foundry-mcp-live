@@ -286,6 +286,19 @@ There are two ways to use Playwright here, answering different questions:
 - **`@playwright/test`** is for the *reusable regression* — the durable, CI/local-lane suite
   (storageState auth, headed backgrounded-tab repaint, traces).
 
+**Run reusable specs with the `ui_test` MCP tool, not against the live world.** foundry-mcp-live
+ships a shared harness (`tools/ui-test`: `@playwright/test` + `@thefehr/foundry-playwright`) for any
+module. Specs live in the module repo at `e2e/*.spec.mjs` and start with
+`import { test, expect } from "@foundry-mcp-live/ui-test";` — each test begins joined as Gamemaster,
+with `foundry.state` helpers (`createTestActor`, `grantCurrency`, … via a system adapter: shadowdark,
+dnd5e, pf2e). `ui_test {action: "run", module: "<abs path>"}` boots a **throwaway Foundry** (own
+dataPath and 127.0.0.1 port 30700–30799, fresh world of the module's system, module enabled), runs
+the specs in the background, deletes the sandbox, and `ui_test {action: "status", runId, waitMs: 40000}`
+returns pass/fail per test with the failure message and screenshot/trace paths. The module repo
+needs no Playwright install; from a shell it is `node <foundry-mcp-live>/tools/ui-test/run.mjs
+--module .`. Prove a new spec both ways: green on the real code, red with the behaviour broken.
+Details in `references/playwright-foundry-e2e.md` §2.
+
 Same rule as Layer 3→1: drive it interactively with Playwright MCP to answer "does this work right now
 across two clients?", then capture the durable version as a `@playwright/test` spec. Both surfaces are
 covered in `references/playwright-foundry-e2e.md`.
@@ -321,7 +334,7 @@ of wiring it into a pipeline that can't get a license.
 Any document a Playwright test creates persists into a real world — clean it up via the bridge or an
 in-page `evaluate` by exact id, or run against a disposable world and document that assumption.
 
-> **Reusable browser regression → `@playwright/test`. One-off browser-level drive that needs login or
+> **Reusable browser regression → a `@playwright/test` spec in `<module>/e2e`, run by `ui_test`. One-off browser-level drive that needs login or
 > two clients → Playwright MCP. One-off in-world check inside the running client → MCP live bridge.**
 > Don't reach for a `@playwright/test` spec to answer a question a single interactive probe could.
 

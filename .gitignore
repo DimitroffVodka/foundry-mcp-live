@@ -28,3 +28,6 @@ server/e2e/fixtures/worlds/*/data/*/LOG.old
 
 # Local tool-usage audit report (world names, eval body previews)
 usage-audit.txt
+
+# ui_test sandboxes (throwaway Foundry dataPaths) and run results
+tools/ui-test/.cache/

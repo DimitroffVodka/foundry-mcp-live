@@ -39,6 +39,48 @@ answer different questions; pick the surface first — see §11.
 
 ## 2. Setup
 
+### With foundry-mcp-live's `ui_test` (preferred)
+
+No per-module install and no live world. The harness in foundry-mcp-live (`tools/ui-test`, installed
+with `npm ci` there) supplies Playwright, [foundry-playwright](https://github.com/TheFehr/foundry-playwright)
+fixtures, the config and a sandbox Foundry; the module repo supplies only specs:
+
+```js
+// <module>/e2e/sheet.spec.mjs
+import { test, expect } from "@foundry-mcp-live/ui-test";
+
+test("Temp HP field survives a tab switch", async ({ page, foundry }) => {
+  const name = `Hero ${Date.now()}`;
+  await foundry.state.createTestActor(name);   // system adapter picks type/system data
+  await page.evaluate((n) => game.actors.getName(n).sheet.render(true), name);
+  const sheet = page.locator(".window-app").filter({ has: page.locator('input[name="system.attributes.hp.value"]') });
+  await sheet.locator('.navigation-tab[data-tab="tab-inventory"]').click();
+  await sheet.locator('.navigation-tab[data-tab="tab-abilities"]').click();
+  await expect(sheet.locator(".sde-temp-hp input")).toBeVisible();
+});
+```
+
+- Run: MCP `ui_test {action: "run", module: "/abs/path/to/module"}` → `runId`; then
+  `ui_test {action: "status", runId, waitMs: 40000}` until `status: "done"`. Shell:
+  `node <foundry-mcp-live>/tools/ui-test/run.mjs --module . [--grep <re>] [--keep]`.
+- The sandbox: a second Foundry from `~/FoundryV14/app`, own dataPath (copied licence, staged system,
+  the module symlinked in, `packs/` copied), 127.0.0.1 port 30700–30799, fresh world `ui-test` with
+  the module and its `relationships.requires` enabled, passwordless Gamemaster. Deleted after the run unless
+  `keep: true`. `ui_test {action: "start"}` gives you one to poke at by hand.
+- Fixtures: every test starts joined as `Gamemaster` (`test.use({ user: null })` starts on a blank
+  page instead; create a player, then `loginAs(page, name)` from the same import). Tests run serially in one world, so give created
+  documents unique names. `foundry.state` needs a system adapter: shadowdark (in the harness), dnd5e,
+  pf2e; add others in `tools/ui-test/index.mjs`.
+- Result: per test a status, the error (the failing expect with received/expected), and attachment paths
+  (screenshot, `trace.zip` → `npx playwright show-trace`, error-context).
+- Not covered: backups/`useBaseWorld` (the sandbox has no admin password; isolation is a fresh
+  sandbox per run), headed runs, and Foundry versions other than the installed one.
+
+The rest of this reference (storageState, determinism, backgrounding) still applies to what you put
+in a spec. The manual setup below is for a repo that runs its own Playwright.
+
+### Manual setup
+
 ```sh
 npm install --save-dev @playwright/test
 npx playwright install chromium
