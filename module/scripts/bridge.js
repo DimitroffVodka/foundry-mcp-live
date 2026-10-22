@@ -32,7 +32,7 @@ import {
   splitSceneCompatibilityFields
 } from "./scene-compat.js";
 import { runFoundrySelfTest } from "./self-test.js";
-import { cellsBlocked as _cellsBlocked, findGridPath as _findGridPath, spatialQuery } from "./spatial.js";
+import { cellsBlocked as _cellsBlocked, findGridPath as _findGridPath, spatialQuery, wallLevel as _wallLevel } from "./spatial.js";
 import { placeable } from "./placeables.js";
 import { shouldAutoConnect } from "./auto-connect.js";
 import { DEFAULT_BRIDGE_PORT, normalizeBridgeUrl, resolveBridgeUrl } from "./bridge-url.js";
@@ -2304,12 +2304,15 @@ const handlers = {
 
       const tokenW = t.width;
       const tokenH = t.height;
+      // v14: test the walls of the token's own Level, not the one this client is viewing.
+      const level = _wallLevel(scene, undefined, t);
 
       let collision = backend;
       let openable = [];
-      const useDoorAware = !!params.canOpenDoors && !!scene.walls?.contents?.length;
+      const levelWalls = (scene.walls?.contents ?? []).filter(w => !level || (w.includedInLevel?.(level) ?? true));
+      const useDoorAware = !!params.canOpenDoors && levelWalls.length > 0;
       if (useDoorAware) {
-        const wallInfos = scene.walls.contents.map(w => ({
+        const wallInfos = levelWalls.map(w => ({
           _id: w._id ?? w.id, c: w.c, door: w.door, ds: w.ds ?? 0, move: w.move
         }));
         collision = _createDoorAwareCollision(backend, wallInfos);
@@ -2317,7 +2320,7 @@ const handlers = {
       }
 
       const directBlocked = _cellsBlocked(
-        t.x, t.y, params.x, params.y, tokenW, tokenH, gridSize, collision
+        t.x, t.y, params.x, params.y, tokenW, tokenH, gridSize, collision, level
       );
 
       let path = null;
@@ -2325,7 +2328,7 @@ const handlers = {
       if (directBlocked) {
         const result = _findGridPath({
           startX: t.x, startY: t.y, endX: params.x, endY: params.y,
-          gridSize, collision, tokenWidth: tokenW, tokenHeight: tokenH
+          gridSize, collision, tokenWidth: tokenW, tokenHeight: tokenH, level
         });
         if (!result || result.path.length === 0) {
           return { error: "Path blocked — no valid route to destination" };
@@ -2382,6 +2385,7 @@ const handlers = {
         x: current.x,
         y: current.y,
         pathCost,
+        level: level?.id ?? null,
         doorsOpened
       };
     });

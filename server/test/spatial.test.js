@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
-import { findGridPath, spatialQuery } from "../../module/scripts/spatial.js";
+import { cellsBlocked, findGridPath, spatialQuery, wallLevel } from "../../module/scripts/spatial.js";
 
 // A vertical wall at x=300 from y=0 to y=300 (grid 100): rows 0-2 are cut, row 3 is open.
 const wallAt300 = {
@@ -118,4 +119,24 @@ test("path/collision/range test the walls of the from token's Level, an explicit
   assert.deepEqual(run({ mode: "path", from: "Alpha", to: { x: 550, y: 150 }, level: "Cellar" }), ["L1", ["L1"]]);
   assert.deepEqual(run({ mode: "collision", from: "Near", to: "Alpha" }), ["L1", ["L1"]], "a token on a missing Level falls back to the initial Level");
   assert.throws(() => spatialQuery({ mode: "collision", from: "Alpha", to: "Near", level: "Attic" }), /level "Attic" is not a Level of scene "Test"/);
+});
+
+test("token move pathed: tests the walls of the moving token's Level", () => {
+  const levels = [{ id: "L1" }, { id: "L2" }];
+  const scene = { levels: Object.assign(levels, { get: (id) => levels.find((l) => l.id === id) }), initialLevel: levels[0] };
+  globalThis.canvas = { level: levels[0] };
+  assert.equal(wallLevel(scene, undefined, { _source: { level: "L2" } }).id, "L2", "the token's Level, not the viewed one");
+  const seen = new Set();
+  const collision = { testCollision: (a, b, opts) => { seen.add(opts.level?.id); return false; } };
+  cellsBlocked(0, 0, 200, 0, 1, 1, 100, collision, levels[1]);
+  findGridPath({ startX: 0, startY: 0, endX: 200, endY: 0, gridSize: 100, collision, level: levels[1] });
+  assert.deepEqual([...seen], ["L2"]);
+  // bridge.js cannot load in node (Foundry globals): check the handler resolves and passes the Level.
+  const src = readFileSync(new URL("../../module/scripts/bridge.js", import.meta.url), "utf8");
+  const start = src.indexOf("\n  move_token_pathed: ");
+  const body = src.slice(start, src.indexOf("\n  },\n", start));
+  assert.match(body, /const level = _wallLevel\(scene, undefined, t\)/);
+  assert.match(body, /_cellsBlocked\([^)]*collision, level\s*\)/);
+  assert.match(body, /_findGridPath\(\{[^}]*\blevel\b[^}]*\}\)/);
+  assert.match(body, /level: level\?\.id \?\? null/);
 });
