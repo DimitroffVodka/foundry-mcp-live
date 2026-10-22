@@ -1,0 +1,11 @@
+{
+  "name": "@foundry-mcp-live/ui-test",
+  "private": true,
+  "description": "Playwright UI tests for any Foundry module, run in a throwaway Foundry sandbox",
+  "type": "module",
+  "exports": "./index.mjs",
+  "dependencies": {
+    "@playwright/test": "1.64.1",
+    "@thefehr/foundry-playwright": "1.8.4"
+  }
+}

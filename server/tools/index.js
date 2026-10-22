@@ -12,7 +12,7 @@
  *
  * Scope of "fresh-on-call":
  *   - tools/world.js, canvas.js, runtime.js, tracing.js, dice.js,
- *     snapshot.js, server-local.js, recorder.js — re-imported each call.
+ *     snapshot.js, server-local.js, recorder.js, ui-test.js — re-imported each call.
  *   - tools/_helpers.js + lib/* — NOT cache-busted (transitively cached
  *     once on first import). Edit those and restart the server.
  */
@@ -26,6 +26,7 @@ const TOOL_MODULES = [
   ["server-local.js", "registerServerLocalTools"],
   ["world-authoring.js", "registerWorldAuthoringTools"],
   ["recorder.js", "registerRecorderTools"],
+  ["ui-test.js", "registerUiTestTools"],
 ];
 
 /**

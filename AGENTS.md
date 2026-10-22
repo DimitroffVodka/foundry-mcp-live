@@ -44,7 +44,7 @@ The server registers **zero resources and zero prompts**. Everything is exposed 
 
 ## How the tools are organized
 
-The server currently exposes ~33 tools (plus three design-harness tools — `render_fixture`, `preview_fixture` and `write_variant` — that register only when a harness exists on the server host; see `server/TOOLS.md`). **Do not assume one tool per verb** — many related operations are merged behind a single tool that takes an `action` discriminator. Read the tool's own schema; the `action` enum lists the valid modes for that tool.
+The server currently exposes ~33 tools (plus three design-harness tools — `render_fixture`, `preview_fixture` and `write_variant` — that register only when a harness exists on the server host, and `ui_test`, Playwright tests for any module in a throwaway Foundry sandbox, which registers only when `tools/ui-test` has its dependencies installed; see `server/TOOLS.md`). **Do not assume one tool per verb** — many related operations are merged behind a single tool that takes an `action` discriminator. Read the tool's own schema; the `action` enum lists the valid modes for that tool.
 
 - **Actors:** `actor_write` (create/update/delete actors and create-from-compendium).
 - **World content:** `scene` (create/update/activate/delete scenes), `placeable` (create/update/delete walls, lights, sounds, tiles, drawings, regions and notes; set door states) and `combat` (start/advance/end encounters) — each merged tool takes an `action` param, not separate `create_*`/`update_*`/`delete_*` verbs.
