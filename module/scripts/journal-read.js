@@ -268,7 +268,7 @@ export function derivedView(doc) {
     system: jsonSafe(doc.toObject(false).system),
     ...(doc.appliedEffects ? {
       appliedEffects: [...doc.appliedEffects].map((e) => jsonSafe({
-        id: e.id, name: e.name, origin: e.origin ?? null, statuses: e.statuses, changes: e.changes ?? e.system?.changes,
+        id: e.id, name: e.name, origin: e.origin ?? null, statuses: e.statuses, changes: e.system?.changes ?? e.changes,
       })),
     } : {}),
     rollData: typeof doc.getRollData === "function" ? jsonSafe(doc.getRollData()) : null,

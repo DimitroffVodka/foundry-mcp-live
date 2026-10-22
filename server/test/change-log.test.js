@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createChangeLog, restoreUpdate, undo, describeEntry, storeDelta, loadStored } from "../../module/lib/change-log.js";
+import { createChangeLog, forcedDeletion, restoreUpdate, undo, describeEntry, storeDelta, loadStored } from "../../module/lib/change-log.js";
 
 const clone = (v) => structuredClone(v);
 
@@ -55,6 +55,25 @@ test("restoreUpdate: old values back, added keys removed with -=, embedded and _
   // a key whose value turned from a scalar into an object is set back wholesale
   assert.deepEqual(restoreUpdate({ a: 5 }, { a: { b: 1 } }), { a: 5 });
   assert.deepEqual(restoreUpdate({ a: { b: 1 } }, { a: { b: 1 } }), {});
+});
+
+test("forcedDeletion: V14 operator when foundry.data.operators exists, V13 -= key otherwise", () => {
+  assert.deepEqual(forcedDeletion("flags.m.entries", "e1"), ["flags.m.entries.-=e1", null]);
+  assert.deepEqual(forcedDeletion("", "temp"), ["-=temp", null]);
+  class ForcedDeletion {}
+  const saved = globalThis.foundry;
+  globalThis.foundry = { data: { operators: { ForcedDeletion } } };
+  try {
+    const [key, value] = forcedDeletion("flags.m.entries", "e1");
+    assert.equal(key, "flags.m.entries.e1");
+    assert.ok(value instanceof ForcedDeletion);
+    assert.equal(forcedDeletion("", "temp")[0], "temp");
+    const update = restoreUpdate({ system: {} }, { system: { temp: 3 } });
+    assert.deepEqual(Object.keys(update), ["system.temp"]);
+    assert.ok(update["system.temp"] instanceof ForcedDeletion);
+  } finally {
+    globalThis.foundry = saved;
+  }
 });
 
 test("record: oversize snapshots are dropped and the entry marked not undoable", () => {

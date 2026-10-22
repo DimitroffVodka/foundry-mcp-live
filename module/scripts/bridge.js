@@ -18,7 +18,7 @@ import { relayRefusal } from "../lib/relay-guard.js";
 import { chatContent, forViewer, forViewerAt, pathTokens, removeSecrets } from "../lib/read-filter.js";
 import { accessRefusal, HANDLER_ACCESS, MUTATION_SETTING } from "../lib/handler-access.js";
 import {
-  createChangeLog, describeEntry, isChangeStore, loadStored, OUTSIDE_THE_LOG, STORE_FLAG, STORE_OPTION, storeDelta,
+  createChangeLog, describeEntry, forcedDeletion, isChangeStore, loadStored, OUTSIDE_THE_LOG, STORE_FLAG, STORE_OPTION, storeDelta,
   undo as undoChanges,
 } from "../lib/change-log.js";
 import { resolveClientId } from "./relay-identity.js";
@@ -143,7 +143,7 @@ async function writeStore() {
     const f = `flags.${MODULE_ID}`;
     await store.update({
       ...Object.fromEntries(Object.entries(set).map(([k, v]) => [`${f}.entries.${k}`, v])),
-      ...Object.fromEntries(drop.map(k => [`${f}.entries.-=${k}`, null])),
+      ...Object.fromEntries(drop.map(k => forcedDeletion(`${f}.entries`, k))),
       [`${f}.seq.${TAB_ID}`]: changeLog.seq,
     }, options);
   } catch (err) {

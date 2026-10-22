@@ -44,6 +44,10 @@ All notable changes to Foundry MCP Live are documented in this file.
 ### Changed
 
 - `request_roll` uses DialogV2 instead of the deprecated v1 `Dialog`.
+- Change-log undo and its store remove keys with V14's `ForcedDeletion`
+  operator instead of the `-=key` syntax V14 deprecates (removed in 16); V13
+  still gets `-=`. Derived actor reads take an effect's `system.changes` first,
+  so V14 never hits the `changes` migration shim.
 - **The read-only toggle is enforced in one place.** Every bridge handler
   declares `read`, `write` or `delete` access; the dispatcher refuses
   undeclared handlers and refuses write/delete ones unless "Allow AI to modify
