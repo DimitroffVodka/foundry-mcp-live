@@ -73,6 +73,24 @@ All notable changes to Foundry MCP Live are documented in this file.
   failing.
 - Bearer and bridge tokens are compared in constant time.
 
+### Fixed
+
+- **The relay's world-load notice no longer fires on a device the MCP server can
+  already reach.** The relay runs on every client by design, and it announced
+  itself on every world load: a world whose gateway lives elsewhere (a hosted
+  world, or a second local Foundry) therefore warned "no MCP gateway is running
+  for this world yet" at every load, on a desktop the server was already driving
+  through the direct bridge. The notice now requires the relay to be the
+  device's *only* route — nothing is shown while the direct bridge socket is
+  open, and each notice shows at most once per browser session instead of once
+  per world load. The case the warning was written for (a tablet or Deck in a
+  world with no gateway yet) still warns, with the same wording, and a new
+  per-client setting **Announce relay status on world load** turns the notice
+  off entirely. The decision is a pure, unit-tested function in
+  `module/scripts/relay-announce.js`; the direct-bridge probe is
+  `isDirectBridgeOpen()` in `bridge.js`, plus a short settle delay because the
+  bridge socket is still CONNECTING during the `ready` hook.
+
 ## [1.0.0] - 2026-09-21
 
 First stable release. The version jumps 0.19.0-beta.3 → 1.0.0 rather than

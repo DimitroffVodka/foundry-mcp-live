@@ -5047,6 +5047,27 @@ Hooks.once("init", () => {
     default: false,
   });
 
+  // Whether this browser announces its relay status on world load. On by
+  // default, because on a device that can ONLY be relayed the absence of the
+  // usual "connected" toast is otherwise indistinguishable from a broken setup.
+  // The notice is skipped anyway when the direct bridge is already connected
+  // (the relay is not this device's only route) and shows at most once per
+  // browser session — so this switch is for total silence. Per client, not per
+  // world: two devices in the same world can want different answers.
+  game.settings.register(MODULE_ID, "relayAnnounce", {
+    name: "Announce relay status on world load",
+    hint: "When on (default), this browser tells you once per session how the MCP server "
+        + "can reach it: a notice naming the device when a relay gateway is running in this "
+        + "world, or a warning when this device is relay-only and no gateway exists yet. "
+        + "Nothing is shown when the direct bridge is already connected, and nothing is "
+        + "shown twice per session. Turn this off to keep world loads completely silent — "
+        + "the relay itself keeps working either way.",
+    scope: "client",
+    config: true,
+    type: Boolean,
+    default: true,
+  });
+
   // Shared secret for the bridge handshake, needed only when the server sets
   // FOUNDRY_WS_TOKEN / BRIDGE_TOKEN — which in practice means "the bridge port
   // was opened to the LAN so a second device could connect". World-scoped on
@@ -5099,6 +5120,21 @@ Hooks.once("init", () => {
 // ---------------------------------------------------------------------------
 // Foundry hook — connect once the game is ready
 // ---------------------------------------------------------------------------
+
+/**
+ * Whether this client already has the direct bridge socket open.
+ *
+ * Handed to the relay so its world-load notice can tell "reachable the ordinary
+ * way" from "relay-only". The relay exists for devices the direct socket can
+ * never reach (an https page cannot open ws:// to a private IP), so a client
+ * that HAS this socket open does not need a relay notice — and in a world whose
+ * gateway lives elsewhere it was actively misleading, warning about an
+ * unreachable device that the server was already driving.
+ */
+function isDirectBridgeOpen() {
+  try { return ws?.readyState === WebSocket.OPEN; } catch { return false; }
+}
+
 Hooks.once("ready", () => {
   loadStore();
   // Auto-connect unless this client explicitly opted out. The dedicated headless
@@ -5120,7 +5156,7 @@ Hooks.once("ready", () => {
   // and it costs a heartbeat.
   try {
     initRelay({ dispatch: dispatchRelayTool });
-    const id = startRelay();
+    const id = startRelay({ isDirectlyBridged: isDirectBridgeOpen });
     console.log(`${MODULE_ID} | Relay ready — clientId ${id.clientId} (boot ${id.bootId})`);
   } catch (err) {
     // A missing secure context is the expected failure (plain http:// LAN page,
