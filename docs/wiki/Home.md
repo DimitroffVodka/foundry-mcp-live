@@ -59,6 +59,7 @@ the join screen.
 | [Settings Reference](Settings-Reference) | Module settings and environment variables, their defaults, and how the two write gates stack |
 | [Hosting & Networking](Hosting-and-Networking) | Local, LAN or hosted Foundry (Forge); the loopback rule, the token/origin rule, and the relay |
 | [Skills](Skills) | `foundry-live`, `foundry-test`, `foundry-v14`; plugin install and connection variables |
+| [Design Harness](Design-Harness) | Look at a module window without opening Foundry: fixtures, the layout check, comparing two checkouts |
 | [Tool reference](https://github.com/DimitroffVodka/foundry-mcp-live/blob/main/server/TOOLS.md) | Every tool, its `action` values and its arguments |
 | [Security model](https://github.com/DimitroffVodka/foundry-mcp-live/blob/main/SECURITY.md) | Threat model, why `evaluate` is on by default, token auth, residual risks |
 | [Agent setup](https://github.com/DimitroffVodka/foundry-mcp-live/blob/main/AGENTS.md) | The first-message protocol, multi-GM routing, mutation caution |

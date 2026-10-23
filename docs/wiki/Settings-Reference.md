@@ -182,6 +182,11 @@ the design harness (`render_fixture`, `preview_fixture`, `write_variant`),
 **38** with `ui_test` too, and **40** with `self_test` and `relaunch_client` as well.
 `FOUNDRY_MCP_ALLOW_EVAL=0` removes two (`evaluate`, `job_result`).
 
+The design tools do not have a gate of their own. They show up when the engine, a
+browser and a Foundry install all exist on the host, and each call needs a `module`
+unless you set `FOUNDRY_DESIGN_MODULE`. [Design Harness](Design-Harness) has the
+details.
+
 ### Auth
 
 | Var | Default | Purpose |
@@ -200,6 +205,18 @@ send a header.
 |---|---|---|
 | `FOUNDRY_MCP_USAGE` | `1` | Per-call usage telemetry: in-memory aggregate at `GET /api/usage` plus a JSONL log. `0`/`false`/`no`/`off` disables |
 | `FOUNDRY_MCP_USAGE_LOG` | `server/usage-telemetry.jsonl` | JSONL path. It can contain truncated arg previews and `evaluate` bodies — keep it local |
+
+### Design harness
+
+Set these on the server if you use the design tools. Defaults come from the code;
+[Design Harness](Design-Harness) explains what they do.
+
+| Var | Default | Purpose |
+|---|---|---|
+| `FOUNDRY_DESIGN_MODULE` | unset | The default `module` for the three tools. Without it, every call has to pass one |
+| `FOUNDRY_DESIGN_HARNESS` | this repo's `tools/design-harness` | Run a different copy of the engine |
+| `FOUNDRY_APP` | `~/FoundryV14/app` | Foundry install the render reads Handlebars, CSS and assets from. The design tools stay unregistered unless its `public/` exists |
+| `CHROME` | first of `/usr/bin/chromium`, `/usr/bin/google-chrome-stable`, `/usr/bin/google-chrome` | Browser the render drives. A path you set but never installed still counts as present, and fails at render time. Not `FOUNDRY_CHROME_PATH`, which belongs to `relaunch_client` and the relay |
 
 ### GM client relaunch (`relaunch_client`)
 
@@ -241,7 +258,7 @@ hosted world. Off by default because it launches a real browser.
 
 | Var | Default | Purpose |
 |---|---|---|
-| `FOUNDRY_MCP_GALLERY_DIR` | `~/.cache/foundry-mcp/design-gallery` | Where the design-fixture harness stores its gallery (only relevant when a harness is installed) |
+| `FOUNDRY_MCP_GALLERY_DIR` | `~/.cache/foundry-mcp/design-gallery` | Where `render_fixture { fixtures: [...] }` writes its HTML gallery, newest ten kept. See [Design Harness](Design-Harness) |
 | `FOUNDRY_MCP_TOKEN` | unset | **Client-side only**: the Claude Code plugin sends it as the Bearer token. Not read by the server |
 
 ---
