@@ -25,6 +25,9 @@ is the per-tool schema reference.
    and server environment variable, with its real default and what it changes.
 3. **[Skills](Skills)** — the three skills the Claude Code plugin installs, what
    each one is for, and when it loads.
+4. **[Hosting & Networking](Hosting-and-Networking)** — the AI stays local;
+   Foundry can be local, on the LAN, or hosted on The Forge. Which side dials
+   what, and when you need the relay.
 
 ---
 
@@ -54,6 +57,7 @@ the join screen.
 | Page | What it covers |
 |---|---|
 | [Settings Reference](Settings-Reference) | Module settings and environment variables, their defaults, and how the two write gates stack |
+| [Hosting & Networking](Hosting-and-Networking) | Local, LAN or hosted Foundry (Forge); the loopback rule, the token/origin rule, and the relay |
 | [Skills](Skills) | `foundry-live`, `foundry-test`, `foundry-v14`; plugin install and connection variables |
 | [Tool reference](https://github.com/DimitroffVodka/foundry-mcp-live/blob/main/server/TOOLS.md) | Every tool, its `action` values and its arguments |
 | [Security model](https://github.com/DimitroffVodka/foundry-mcp-live/blob/main/SECURITY.md) | Threat model, why `evaluate` is on by default, token auth, residual risks |

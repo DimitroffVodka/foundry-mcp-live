@@ -78,6 +78,10 @@ A client-side `localStorage.mcpBridgeToken` is honoured where this is blank; the
 world setting wins when both are set, so a stale hand-set value cannot lock a
 client out of a corrected world.
 
+On a hosted world (The Forge, a VPS) this is the one extra step setup needs: the
+page's origin is public, so the server enforces the token for that loopback
+peer. See [Hosting & Networking](Hosting-and-Networking).
+
 ### MCP server address
 
 | | |

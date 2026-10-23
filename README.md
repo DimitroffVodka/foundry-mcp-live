@@ -93,6 +93,8 @@ MCP HTTP server  listening on http://127.0.0.1:3000/mcp
 
 Keep this terminal open. The server auto-reloads tool files but other changes need a restart.
 
+Foundry does not have to be on this machine. A world on The Forge or another host still dials your local server, because the **browser** dials out — the server never connects to Foundry. See [Hosting & Networking](docs/wiki/Hosting-and-Networking.md) for that case, and for when you need a token or the relay.
+
 #### Optional: run on Linux login/boot with systemd
 
 For a Linux workstation or small dedicated host, install the included user service:
