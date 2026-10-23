@@ -82,10 +82,10 @@ function rig(looks) {
   return { root, head, base, harness: path.join(head, "tools", "design-harness"), gallery: path.join(root, "out") };
 }
 async function withGalleryEnv(r, fn) {
-  const prev = [process.env.FOUNDRY_DESIGN_HARNESS, process.env.FOUNDRY_MCP_GALLERY_DIR];
-  process.env.FOUNDRY_DESIGN_HARNESS = r.harness; process.env.FOUNDRY_MCP_GALLERY_DIR = r.gallery;
+  const prev = [process.env.FOUNDRY_DESIGN_HARNESS, process.env.FOUNDRY_MCP_GALLERY_DIR, process.env.FOUNDRY_DESIGN_MODULE];
+  process.env.FOUNDRY_DESIGN_HARNESS = r.harness; process.env.FOUNDRY_MCP_GALLERY_DIR = r.gallery; process.env.FOUNDRY_DESIGN_MODULE = r.head;
   try { return await fn(); } finally {
-    for (const [i, k] of ["FOUNDRY_DESIGN_HARNESS", "FOUNDRY_MCP_GALLERY_DIR"].entries()) {
+    for (const [i, k] of ["FOUNDRY_DESIGN_HARNESS", "FOUNDRY_MCP_GALLERY_DIR", "FOUNDRY_DESIGN_MODULE"].entries()) {
       if (prev[i] === undefined) delete process.env[k]; else process.env[k] = prev[i];
     }
   }

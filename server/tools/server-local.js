@@ -11,6 +11,7 @@ import { randomUUID }                        from "node:crypto";
 import { existsSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir, tmpdir }                   from "node:os";
 import path                                  from "node:path";
+import { fileURLToPath }                     from "node:url";
 import { promisify }                         from "node:util";
 import { z }                                 from "zod";
 import { bridges, lastSeenBridges, reconnectWaiters, routeBridge } from "../lib/bridges.js";
@@ -41,26 +42,40 @@ function diagnosisReply(error, diagnosis) {
 }
 
 // --- Design-harness rendering (offline, any module) -------------------------
-// A design harness (a module's tools/design-harness) renders a fixture in a
-// Foundry v14 window frame with no world running. `render_fixture` shells to
-// its shot.mjs and returns the PNG plus the layout check. It registers only
-// when the harness exists on this host (FOUNDRY_DESIGN_HARNESS overrides the
-// default path); tools/*.js hot-reloads, so the env is read per call.
+// The engine lives in this repo (tools/design-harness); a module keeps only its
+// own tools/design-harness/fixtures. `render_fixture` shells to the engine's
+// shot.mjs and returns the PNG plus the layout check. The tools register when
+// chromium and a Foundry install are on this host (FOUNDRY_DESIGN_HARNESS
+// points them at another copy of the engine); tools/*.js hot-reloads, so the
+// env is read per call.
 const execFileAsync = promisify(execFile);
 
 export function designHarnessDir() {
   return process.env.FOUNDRY_DESIGN_HARNESS
-    ?? path.join(homedir(), "git", "shadowdark-enhancer", "tools", "design-harness");
+    ?? fileURLToPath(new URL("../../tools/design-harness/", import.meta.url)).replace(/\/$/, "");
+}
+
+// Same browser list as the engine's shot.mjs (CHROME overrides it).
+export function designChromium() {
+  return process.env.CHROME ?? ["/usr/bin/chromium", "/usr/bin/google-chrome-stable", "/usr/bin/google-chrome"].find(existsSync);
+}
+
+// The engine borrows Foundry's own Handlebars and CSS from FOUNDRY_APP.
+export function designFoundryApp() {
+  return process.env.FOUNDRY_APP ?? path.join(homedir(), "FoundryV14", "app");
 }
 
 export function designHarnessReady() {
-  return existsSync(path.join(designHarnessDir(), "shot.mjs"));
+  return existsSync(path.join(designHarnessDir(), "shot.mjs"))
+    && !!designChromium() && existsSync(path.join(designFoundryApp(), "public"));
 }
 
+// There is no default module: the engine belongs to no module. FOUNDRY_DESIGN_MODULE names the one to use when `module` is omitted.
 export function designRenderTarget({ fixture, module }) {
-  const moduleDir = module ? path.resolve(module) : path.resolve(designHarnessDir(), "..", "..");
-  const fixturesDir = path.join(moduleDir, "tools", "design-harness", "fixtures");
-  return { moduleDir, fixturesDir, fixtureFile: path.join(fixturesDir, `${fixture}.mjs`) };
+  const given = module ?? process.env.FOUNDRY_DESIGN_MODULE;
+  const moduleDir = given ? path.resolve(given) : null;
+  const fixturesDir = moduleDir && path.join(moduleDir, "tools", "design-harness", "fixtures");
+  return { moduleDir, fixturesDir, fixtureFile: fixturesDir && path.join(fixturesDir, `${fixture}.mjs`) };
 }
 
 export function buildDesignRenderInvocation({ fixture, module, theme, width, state }, outPng) {
@@ -71,7 +86,8 @@ export function buildDesignRenderInvocation({ fixture, module, theme, width, sta
   // A random port: shot.mjs starts its own in-process server, and the default
   // 4177 would collide with a served harness or a concurrent render.
   const env = { ...process.env, PORT: String(41000 + Math.floor(Math.random() * 8000)) };
-  if (module) env.MODULE_DIR = path.resolve(module);
+  const { moduleDir } = designRenderTarget({ module });
+  if (moduleDir) env.MODULE_DIR = moduleDir;
   return { args, env };
 }
 
@@ -79,17 +95,22 @@ function listFixtures(fixturesDir) {
   return readdirSync(fixturesDir).filter(f => f.endsWith(".mjs") && !f.startsWith("_")).map(f => f.slice(0, -4));
 }
 
-// Sibling checkouts of the default module that carry their own harness — what a
+// Checkouts with a harness next to this repo, in ~/git and next to FOUNDRY_DESIGN_MODULE — what a
 // model can pass as `module` without having to guess paths.
 function listHarnessModules() {
-  const parent = path.dirname(designRenderTarget({}).moduleDir);
-  try {
-    return readdirSync(parent, { withFileTypes: true })
-      .filter(d => d.isDirectory()
-        && existsSync(path.join(parent, d.name, "module.json"))
-        && existsSync(path.join(parent, d.name, "tools", "design-harness", "fixtures")))
-      .map(d => path.join(parent, d.name));
-  } catch { return []; }
+  const here = fileURLToPath(new URL("../../", import.meta.url));
+  const parents = new Set([path.dirname(here.replace(/\/$/, "")), path.join(homedir(), "git")]);
+  if (process.env.FOUNDRY_DESIGN_MODULE) parents.add(path.dirname(path.resolve(process.env.FOUNDRY_DESIGN_MODULE)));
+  return [...parents].flatMap((parent) => {
+    try {
+      return readdirSync(parent, { withFileTypes: true })
+        .filter(d => d.isDirectory()
+          && existsSync(path.join(parent, d.name, ".git", "HEAD"))   // main clones, not PR worktrees
+          && existsSync(path.join(parent, d.name, "module.json"))
+          && existsSync(path.join(parent, d.name, "tools", "design-harness", "fixtures")))
+        .map(d => path.join(parent, d.name));
+    } catch { return []; }
+  });
 }
 
 export function validateDesignTarget({ fixture, module }) {
@@ -97,7 +118,12 @@ export function validateDesignTarget({ fixture, module }) {
     return { error: `Error: \`module\` must be an absolute path to a module checkout root (got \`${module}\`).` };
   }
   const { moduleDir, fixturesDir, fixtureFile } = designRenderTarget({ fixture, module });
-  if (module && !existsSync(path.join(moduleDir, "module.json"))) {
+  if (!moduleDir) {
+    const mods = listHarnessModules();
+    return { error: "Error: pass `module` (absolute path to the module checkout whose tools/design-harness/fixtures to render)."
+      + (mods.length ? ` Checkouts with fixtures: ${mods.slice(0, 8).join(", ")}${mods.length > 8 ? ` (+${mods.length - 8} more)` : ""}.` : "") };
+  }
+  if (!existsSync(path.join(moduleDir, "module.json"))) {
     return { error: `Error: no module.json under ${moduleDir} — \`module\` must be a module checkout root.` };
   }
   if (!existsSync(fixturesDir)) {
@@ -189,7 +215,8 @@ export async function callPreview(params, fallbackExpression, userId, { request 
 export async function fetchFixtureFragment({ fixture, module, state }, { timeoutMs = 15_000 } = {}) {
   const port = 41000 + Math.floor(Math.random() * 8000);
   const env = { ...process.env, PORT: String(port) };
-  if (module) env.MODULE_DIR = path.resolve(module);
+  const { moduleDir } = designRenderTarget({ module });
+  if (moduleDir) env.MODULE_DIR = moduleDir;
   const child = spawn(process.execPath, [path.join(designHarnessDir(), "serve.mjs")],
     { env, cwd: homedir(), stdio: ["ignore", "ignore", "pipe"] });
   let died = null;
@@ -651,16 +678,16 @@ export function registerServerLocalTools(mcp) {
       + "running (core CSS + the game system's CSS + a module's stylesheets, offline) and return "
       + "the image plus the harness's layout check (visible/primary button counts, overflow, tiny "
       + "controls, missing string keys). The offline design-review loop for any module checkout — `screenshot` is its "
-      + "live-world counterpart; theme 'both' renders dark and light in one call; `against` compares a base checkout with the head and reports whether pixels and the layout check changed (PR review). `fixtures` renders several variants at once and writes one HTML gallery of them. Present only when a design harness is installed on this host "
-      + "(FOUNDRY_DESIGN_HARNESS overrides the default path); needs chromium on the host.",
+      + "live-world counterpart; theme 'both' renders dark and light in one call; `against` compares a base checkout with the head and reports whether pixels and the layout check changed (PR review). `fixtures` renders several variants at once and writes one HTML gallery of them. Present only when chromium and a Foundry install (FOUNDRY_APP) are on this host; "
+      + "the engine ships in this repo's tools/design-harness (FOUNDRY_DESIGN_HARNESS overrides it).",
       {
         fixture: z.string().regex(/^[\w-]+$/).optional().describe(
           "Fixture name — a file in the module's tools/design-harness/fixtures/, without .mjs. "
-          + "Omit to list the available fixtures (and other modules that have a harness)."
+          + "Omit to list the available fixtures (and other checkouts that have fixtures)."
         ),
         module: z.string().optional().describe(
           "Absolute path to the module checkout to render (any Foundry module). "
-          + "Default: the harness's own module."
+          + "Required unless FOUNDRY_DESIGN_MODULE is set; the engine belongs to no module."
         ),
         fixtures: z.array(z.string().regex(/^[\w-]+$/)).min(1).max(8).optional().describe(
           "Several fixtures in one call (use instead of `fixture`) — e.g. a window's variants. Returns each head render "
@@ -692,12 +719,12 @@ export function registerServerLocalTools(mcp) {
       + "(fixtures/<name>.mjs and variants/<name>/*.hbs), never over a hand-written fixture. "
       + "action 'write' (default) creates or updates a variant; action 'discard' deletes a variant this tool generated. "
       + "The files are real files in the module checkout (visible to git) — discard the ones you do not keep. "
-      + "Present only when a design harness is installed on this host.",
+      + "Present only when chromium and a Foundry install are on this host.",
       {
         action: z.enum(["write", "discard"]).optional().describe("'write' (default) or 'discard'."),
         name: z.string().regex(/^[A-Za-z0-9][\w-]*$/).describe("The variant's fixture name (new, or a variant this tool generated)."),
         base: z.string().regex(/^[A-Za-z0-9][\w-]*$/).optional().describe("Existing fixture to derive from. Required for write."),
-        module: z.string().optional().describe("Absolute path to the module checkout. Default: the harness's own module."),
+        module: z.string().optional().describe("Absolute path to the module checkout. Required unless FOUNDRY_DESIGN_MODULE is set."),
         templates: z.record(z.string(), z.string()).optional().describe(
           "Template swaps: key = the template path the base fixture uses (e.g. 'templates/crawl-tracker-list.hbs'), "
           + "value = the new handlebars source. Use the same context shape and data-action names as the real template. "
@@ -739,14 +766,14 @@ export function registerServerLocalTools(mcp) {
       + "stylesheet conflicts). Renders the fixture's parts plus its own css — proposal fixtures bring "
       + "their kit — opens (or replaces) one preview window, screenshots it back (CDP real pixels when a Chrome debugger port answers, html2canvas fallback — flagged in the reply — otherwise), and LEAVES IT OPEN for "
       + "inspection; close it with `close: true` or its ✕. Nothing is persisted and no world documents "
-      + "change. Present only when a design harness is installed on this host "
-      + "(FOUNDRY_DESIGN_HARNESS overrides the default path).",
+      + "change. Present only when chromium and a Foundry install are on this host "
+      + "(FOUNDRY_DESIGN_HARNESS overrides the engine path).",
       {
         fixture: z.string().regex(/^[\w-]+$/).optional().describe(
           "Fixture name — a file in the module's tools/design-harness/fixtures/, without .mjs. Required unless close:true (omit to list the available ones)."
         ),
         module: z.string().optional().describe(
-          "Absolute path to the module checkout to render (any Foundry module). Default: the harness's own module."
+          "Absolute path to the module checkout to render (any Foundry module). Required unless FOUNDRY_DESIGN_MODULE is set."
         ),
         state: z.string().regex(/^[\w.-]+$/).optional().describe(
           "Named fixture state, when the fixture defines them (see its build(state))."

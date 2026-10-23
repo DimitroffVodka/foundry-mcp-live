@@ -264,7 +264,7 @@ Full per-platform walkthrough: **[docs/updating-the-server.md](docs/updating-the
 
 ## Available Tools
 
-A default install registers 27 tools. `FOUNDRY_MCP_ALLOW_WRITE=1` adds the seven world-authoring tools (34), and the design harness adds four more (38 with both). `self_test` and `relaunch_client` are one each on top. Related operations are merged behind one tool that takes a discriminator — `action`, or `type` / `target` where that reads better — so don't assume one tool per verb. Each tool's schema lists its own valid values.
+A default install registers 27 tools. `FOUNDRY_MCP_ALLOW_WRITE=1` adds the seven world-authoring tools (34), the design harness adds three more (`render_fixture`, `preview_fixture`, `write_variant`) and `ui_test` one (38 with all of them). `self_test` and `relaunch_client` are one each on top. Related operations are merged behind one tool that takes a discriminator — `action`, or `type` / `target` where that reads better — so don't assume one tool per verb. Each tool's schema lists its own valid values.
 
 **Connection and diagnostics**
 
@@ -324,7 +324,7 @@ A default install registers 27 tools. `FOUNDRY_MCP_ALLOW_WRITE=1` adds the seven
 
 See [server/TOOLS.md](server/TOOLS.md) for full tool schemas and arguments.
 
-Four more tools register only when their harness is installed on the server host: `render_fixture` and `write_variant` (offline design review without a world), `preview_fixture` (the same fixture as a real window in a live client), and `ui_test` (Playwright specs in a throwaway Foundry sandbox).
+Four more tools register only when their prerequisites are on the server host: `render_fixture` and `write_variant` (offline design review without a world), `preview_fixture` (the same fixture as a real window in a live client) — the engine ships in `tools/design-harness/` and needs chromium and a Foundry install (`FOUNDRY_APP`, default `~/FoundryV14/app`); a module supplies only its `tools/design-harness/fixtures/` — and `ui_test` (Playwright specs in a throwaway Foundry sandbox, needs `npm ci` in `tools/ui-test`).
 
 ## Multi-user routing
 

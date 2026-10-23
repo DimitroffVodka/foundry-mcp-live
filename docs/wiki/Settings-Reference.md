@@ -173,9 +173,9 @@ is the exception: it registers either way because `action: "read"` is a read, an
 only `action: "send"` raises `FML-0003`.
 
 Counted against a running server, the tool list grows in steps: **27** with no
-gates, **34** with `FOUNDRY_MCP_ALLOW_WRITE=1`, **38** with the write gate plus
-the design harness (`render_fixture`, `preview_fixture`, `write_variant`,
-`ui_test`), and **40** with `self_test` and `relaunch_client` as well.
+gates, **34** with `FOUNDRY_MCP_ALLOW_WRITE=1`, **37** with the write gate plus
+the design harness (`render_fixture`, `preview_fixture`, `write_variant`),
+**38** with `ui_test` too, and **40** with `self_test` and `relaunch_client` as well.
 `FOUNDRY_MCP_ALLOW_EVAL=0` removes two (`evaluate`, `job_result`).
 
 ### Auth
