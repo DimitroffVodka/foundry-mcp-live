@@ -4,6 +4,10 @@ Connect any MCP-compatible AI client (Claude Desktop, Claude Code, Codex CLI, Ge
 
 > Released as `foundry-mcp-live` (the Foundry module id and the GitHub repo name match). The id was renamed in v0.7.0 to avoid a collision with an unrelated module in Foundry's package directory; v0.7.1 renamed the repo to match.
 
+**New here?** The [wiki](docs/wiki/Home.md) is the full guide — installation, every module setting and environment variable, and the agent skills. This README stays the quickstart; [server/TOOLS.md](server/TOOLS.md) is the per-tool reference.
+
+**Compatibility:** Foundry VTT **v13 and v14** (`module/module.json`: `minimum: 13`, `verified: 14`). The server needs Node.js (CI runs 22 and 24; no engine range is declared).
+
 ## Architecture
 
 ```
@@ -21,7 +25,7 @@ Connect any MCP-compatible AI client (Claude Desktop, Claude Code, Codex CLI, Ge
 
 - **MCP Server** (`server/server.js`, Node.js) — Runs locally on `http://127.0.0.1:3000/mcp` (MCP HTTP transport) and `ws://127.0.0.1:3001` (Foundry bridge). Must be started manually and kept running.
 - **Foundry Module** (`module/`, browser JS) — Connects to the WebSocket server on load. Handles tool requests against the live `game` object.
-- **stdio proxy** (`server/proxy.mjs`) — Bridge for clients that only speak stdio MCP (Claude Desktop, Claude Code).
+- **stdio proxy** (`server/proxy.mjs`) — Bridge for clients without HTTP MCP transport (Claude Desktop; a fallback for any other stdio-only client).
 
 ## Repo layout
 
@@ -78,12 +82,12 @@ The server is HTTP-based and must be running before any client connects:
 cd server
 npm start
 # or on Windows: server\start.bat
-# or on macOS/Linux: ./start.sh
+# or on macOS/Linux: server/start.sh  (this launcher enables world writes — see below)
 ```
 
 You should see:
 ```
-[foundry-mcp] WebSocket server listening on ws://localhost:3001
+WebSocket bridge listening on ws://127.0.0.1:3001
 MCP HTTP server  listening on http://127.0.0.1:3000/mcp
 ```
 
@@ -117,7 +121,7 @@ User services normally start when you log in. To start this service at machine b
 sudo loginctl enable-linger "$USER"
 ```
 
-The systemd service keeps the same safe defaults as `npm start`: write, eval, self-test, and relaunch tools stay off unless you uncomment or add the matching variables in `~/.config/foundry-mcp-live/server.env`.
+The systemd service keeps the safe defaults: write, self-test, relaunch and relay stay off unless you uncomment or add the matching variables in `~/.config/foundry-mcp-live/server.env`. `evaluate` is the exception — it is on unless you set `FOUNDRY_MCP_ALLOW_EVAL=0`.
 
 #### Optional: enable opt-in tools
 
@@ -150,7 +154,7 @@ FOUNDRY_MCP_ALLOW_WRITE=1 npm start
 
 After enabling, the server's startup output is the source of truth. If you set the vars but the new tools still don't appear in your AI client, it usually means the env var didn't actually reach the node process — verify with `echo %FOUNDRY_MCP_ALLOW_WRITE%` (Windows) or `echo $FOUNDRY_MCP_ALLOW_WRITE` (macOS/Linux) in the same shell *before* you launch.
 
-Other tunables (ports, host binding, bearer token) live in the full [Environment variables](#environment-variables) table below.
+Other tunables (ports, host binding, bearer token) live in the [Environment variables](#environment-variables) table below. The [wiki settings reference](docs/wiki/Settings-Reference.md) has the complete list, including the relay gateway and relaunch-supervision variables.
 
 ### 4. Configure your AI client
 
@@ -192,7 +196,7 @@ Confirm with `claude mcp list` — should show `foundry-vtt: http://127.0.0.1:30
 /plugin install foundry-mcp-live@foundry-mcp-live
 ```
 
-The plugin only connects; it does not start the server, so steps 1–3 still apply. It points at `http://127.0.0.1:3000/mcp`; set `FOUNDRY_MCP_URL` before starting Claude Code to use another address, and `FOUNDRY_MCP_TOKEN` if the server has `BRIDGE_TOKEN` set. If you already added the server with `claude mcp add` at the same URL, Claude Code keeps that entry and skips the plugin's copy, so the tools are not listed twice.
+The plugin only connects; it does not start the server, so steps 1–3 still apply. It points at `http://127.0.0.1:3000/mcp`; set `FOUNDRY_MCP_URL` before starting Claude Code to use another address, and `FOUNDRY_MCP_TOKEN` if the server has `BRIDGE_TOKEN` set. If you already added the server with `claude mcp add` at the same URL, Claude Code keeps that entry and skips the plugin's copy, so the tools are not listed twice. What each skill covers is on [the wiki](docs/wiki/Skills.md).
 
 #### Codex CLI
 
@@ -250,7 +254,7 @@ systemctl --user restart foundry-mcp-live
 # Windows / macOS / manual
 git pull                 # or re-download the latest release
 cd server && npm install # required when dependencies change
-# then restart the server: start.bat (Windows) or start.sh (Linux/macOS)
+# then restart the server: server/start.bat (Windows) or server/start.sh (Linux/macOS; enables world writes)
 ```
 
 > Always run `npm install` after pulling — some fixes are dependency changes and
@@ -260,7 +264,7 @@ Full per-platform walkthrough: **[docs/updating-the-server.md](docs/updating-the
 
 ## Available Tools
 
-33 tools. Related operations are merged behind one tool that takes a discriminator — `action`, or `type` / `target` where that reads better — so don't assume one tool per verb. Each tool's schema lists its own valid values.
+27 tools on a default install. `FOUNDRY_MCP_ALLOW_WRITE=1` adds the seven world-authoring tools, and `self_test`, `relaunch_client` and the design-harness tools are further opt-ins. Related operations are merged behind one tool that takes a discriminator — `action`, or `type` / `target` where that reads better — so don't assume one tool per verb. Each tool's schema lists its own valid values.
 
 **Connection and diagnostics**
 
@@ -304,6 +308,7 @@ Full per-platform walkthrough: **[docs/updating-the-server.md](docs/updating-the
 | `placeable` | `action`: create, update, delete, door — walls, lights, sounds, tiles, drawings, regions, notes (write gate) |
 | `apply_damage` | Damage with per-target outcomes, HP clamped by the system (write gate) |
 | `request` | Prompts a real player's screen and waits — `action`: roll, check, itemUse, ask (write gate) |
+| `changes` | Change log of the routed browser — `action`: list (newest first, filterable by call or document), undo one entry, one call, or the latest call |
 
 **Capture and investigation**
 
@@ -318,6 +323,8 @@ Full per-platform walkthrough: **[docs/updating-the-server.md](docs/updating-the
 | `self_test` | Guarded schema-drift smoke test after a Foundry update (opt-in) |
 
 See [server/TOOLS.md](server/TOOLS.md) for full tool schemas and arguments.
+
+Four more tools register only when their harness is installed on the server host: `render_fixture` and `write_variant` (offline design review without a world), `preview_fixture` (the same fixture as a real window in a live client), and `ui_test` (Playwright specs in a throwaway Foundry sandbox).
 
 ## Multi-user routing
 
@@ -374,7 +381,7 @@ You should get a 200 with an `mcp-session-id` header.
 | `FOUNDRY_CHROME_PATH` | empty | Absolute path to the Chrome/Chromium executable used by `puppeteer-core`. |
 | `FOUNDRY_CHROME_USER_DATA_DIR` | empty | Optional dedicated Chrome profile directory for the relaunched client. |
 | `FOUNDRY_RELAUNCH_ALLOW_REMOTE` | `0` | Set to `1` to allow a non-loopback `FOUNDRY_RELAUNCH_URL`. |
-| `FOUNDRY_WS_HOST` | `127.0.0.1` | Interface the bridge WebSocket binds to. Default is loopback. Set `0.0.0.0` to let another device on your LAN connect — see [Connecting a second device](#connecting-a-second-device-on-your-lan). |
+| `FOUNDRY_WS_HOST` | `127.0.0.1` | Interface the bridge WebSocket binds to. Default is loopback. Set `::` to let another device on your LAN connect — not `0.0.0.0`, which is IPv4-only — see [Connecting a second device](#connecting-a-second-device-on-your-lan). |
 | `FOUNDRY_WS_TOKEN` | (auto-generated when needed) | Shared secret for the **WebSocket bridge only**, required of clients that reach the bridge **from another machine**. A Foundry client on the server's own machine connects without one. You normally don't set this: when the bridge is exposed with `FOUNDRY_WS_HOST`, the server generates a token, saves it to `bridge-token` in its config dir, and a local GM client publishes it into the world so other devices pick it up automatically. Set it explicitly only to choose the value yourself. |
 | `FOUNDRY_WS_ALLOWED_ORIGINS` | (unset) | Extra browser origins that may connect from this machine without a token, comma-separated (`http://foundry.lan:30000`). Loopback origins are already allowed; you need this only when the local client is served under a non-loopback name, e.g. through an SSH tunnel or a hosts-file alias. |
 | `BRIDGE_TOKEN` | (unset) | Shared secret for **both** the bridge and the MCP HTTP endpoint. If set, all MCP HTTP requests must send `Authorization: Bearer <token>`. See [SECURITY.md](SECURITY.md). |
@@ -404,7 +411,7 @@ Use `::`, not `0.0.0.0`. `0.0.0.0` is IPv4-only, so a browser that resolves `loc
 
 Then `systemctl --user restart foundry-mcp-live`. The MCP HTTP port (3000) stays bound to `127.0.0.1` either way — only the bridge is exposed.
 
-**Then open the port in your host firewall**, which is a separate thing from the bind address and easy to miss: the server will happily report `listening on ws://0.0.0.0:3001` while the firewall silently drops every packet from the other device. The failure looks identical to "the client isn't trying" — nothing in the server log at all, not even a rejection.
+**Then open the port in your host firewall**, which is a separate thing from the bind address and easy to miss: the server will happily report the bridge listening while the firewall silently drops every packet from the other device. The failure looks identical to "the client isn't trying" — nothing in the server log at all, not even a rejection.
 
 ```sh
 # ufw — scope it to your LAN, not the internet
@@ -434,7 +441,7 @@ Clients can still override with `localStorage.setItem("mcpBridgeToken", "…")` 
 - The `evaluate` tool runs arbitrary JS in the Foundry client context — enabled by default, since both ports are loopback-only and the client is one you configured. Disable with `FOUNDRY_MCP_ALLOW_EVAL=0`. Use `background: true` plus `job_result` for unbounded work; results larger than 256 KiB are returned by handle.
 - World-authoring tools (create actors/folders/journals) also mutate persistent state and are disabled by default. Enable with `FOUNDRY_MCP_ALLOW_WRITE=1`. See [SECURITY.md](SECURITY.md).
 - `relaunch_client` is local and opt-in. Keep its Chrome profile dedicated to Foundry automation and store any GM password only in the server environment.
-- Both ports bind to `127.0.0.1` only — not exposed to the network.
+- Both ports bind to `127.0.0.1` by default. Only the bridge can be opened to the LAN (`FOUNDRY_WS_HOST`); the MCP HTTP port is always loopback-only.
 - No API tokens are consumed by the AI clients. All communication is local: AI client ↔ MCP server ↔ Foundry browser.
 - Tool-usage telemetry is on by default and fully local. `GET /api/usage` returns the live per-tool aggregate (counts, error rate, avg duration, first/last used); the JSONL log records one rich line per call for offline analysis. Both are gated by the same `BRIDGE_TOKEN` as `/mcp` when one is set. Disable with `FOUNDRY_MCP_USAGE=0`.
 - See [SECURITY.md](SECURITY.md) for the threat model and opt-in auth.
