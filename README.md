@@ -264,7 +264,7 @@ Full per-platform walkthrough: **[docs/updating-the-server.md](docs/updating-the
 
 ## Available Tools
 
-27 tools on a default install. `FOUNDRY_MCP_ALLOW_WRITE=1` adds the seven world-authoring tools, and `self_test`, `relaunch_client` and the design-harness tools are further opt-ins. Related operations are merged behind one tool that takes a discriminator — `action`, or `type` / `target` where that reads better — so don't assume one tool per verb. Each tool's schema lists its own valid values.
+A default install registers 27 tools. `FOUNDRY_MCP_ALLOW_WRITE=1` adds the seven world-authoring tools (34), and the design harness adds four more (38 with both). `self_test` and `relaunch_client` are one each on top. Related operations are merged behind one tool that takes a discriminator — `action`, or `type` / `target` where that reads better — so don't assume one tool per verb. Each tool's schema lists its own valid values.
 
 **Connection and diagnostics**
 

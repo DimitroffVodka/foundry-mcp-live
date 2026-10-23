@@ -172,6 +172,12 @@ never registered, so they do not appear in the client's tool list at all. `chat`
 is the exception: it registers either way because `action: "read"` is a read, and
 only `action: "send"` raises `FML-0003`.
 
+Counted against a running server, the tool list grows in steps: **27** with no
+gates, **34** with `FOUNDRY_MCP_ALLOW_WRITE=1`, **38** with the write gate plus
+the design harness (`render_fixture`, `preview_fixture`, `write_variant`,
+`ui_test`), and **40** with `self_test` and `relaunch_client` as well.
+`FOUNDRY_MCP_ALLOW_EVAL=0` removes two (`evaluate`, `job_result`).
+
 ### Auth
 
 | Var | Default | Purpose |
