@@ -47,7 +47,7 @@ All notable changes to Foundry MCP Live are documented in this file.
   `shot.mjs`, `serve.mjs`) moved out of Shadowdark Enhancer; a module keeps only
   its own `tools/design-harness/fixtures/`. `render_fixture`, `preview_fixture`
   and `write_variant` register whenever chromium and a Foundry install are
-  found. `render_fixture` now needs `module` (or `FOUNDRY_DESIGN_MODULE`).
+  found. All three now need `module` (or `FOUNDRY_DESIGN_MODULE`).
   `FOUNDRY_DESIGN_HARNESS` still overrides the engine path.
 
 - `request_roll` uses DialogV2 instead of the deprecated v1 `Dialog`.

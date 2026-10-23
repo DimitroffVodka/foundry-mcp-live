@@ -1,7 +1,7 @@
 # Design harness
 
 The engine ships with foundry-mcp-live. A module keeps only its own `tools/design-harness/fixtures/`.
-The MCP tools `render_fixture`, `preview_fixture` and `write_variant` run this engine (they appear when chromium and a Foundry install are found; `FOUNDRY_DESIGN_HARNESS` points them at another copy, and `render_fixture` needs a `module`).
+The MCP tools `render_fixture`, `preview_fixture` and `write_variant` run this engine (they appear when chromium and a Foundry install are found; `FOUNDRY_DESIGN_HARNESS` points them at another copy, and all three need a `module`).
 
 Renders a module template in a Foundry v14 window frame (core CSS, the active game system's CSS, the
 module's stylesheets), with no world running. For checking how a window looks before it ships.
@@ -26,7 +26,7 @@ The game system comes from the module's first declared system, else shadowdark (
   or the fixture's own `primary` selector) and lists layout problems
   (content sticking out sideways, text overflowing, tiny controls, sideways scroll), and names any missing
   string keys.
-- Paths: `MODULE_DIR` (the module to render; default: the module you run it from, else this checkout),
+- Paths: `MODULE_DIR` (the module to render; default: the module you run it from),
   `SYSTEM_DIR` (default: the module's declared system, else shadowdark), `FOUNDRY_APP` (default
   `~/FoundryV14/app`), `PORT`.
 - A fixture can export `helpers: { name: fn }` for Handlebars helpers its module registers at init (the harness cannot know them); they are registered for that fixture's renders only.

@@ -490,7 +490,7 @@ Writes are real files in the module checkout, **under `<module>/tools/design-har
   - `action?` — `"write"` (default) or `"discard"`.
   - `name` — the variant's fixture name (letters, digits, `-`, `_`); new, or a variant this tool generated.
   - `base` — existing fixture to derive from (required for write).
-  - `module?` — absolute path to the module checkout; default: the harness's own module.
+  - `module?` — **absolute** path to a module checkout root. **Required** unless `FOUNDRY_DESIGN_MODULE` names a default; the engine belongs to no module.
   - `templates?` — `{ "<template path the base uses>": "<handlebars source>" }`, up to 20, 200 KB each. Keys are the paths the base fixture names (e.g. `templates/crawl-tracker-list.hbs`); use the real template's context shape and `data-action` names.
   - `css?` — CSS appended after the base fixture's styles (200 KB max).
   - `title?`, `width?`, `classes?` — scalar overrides of the window.
@@ -502,7 +502,7 @@ Open a design-harness fixture as a **real window inside a live Foundry client** 
 
 - **Params**:
   - `fixture` (required unless `close:true`; omit to list the available ones) — fixture file name (no `.mjs`).
-  - `module?` — absolute path to a module checkout root; default: the harness's own module.
+  - `module?` — **absolute** path to a module checkout root. **Required** unless `FOUNDRY_DESIGN_MODULE` names a default; the engine belongs to no module.
   - `state?` — named fixture state.
   - `width?` — override the window width in px; default: the fixture's own width (else 600).
   - `close?` — close the preview window and return instead of opening.

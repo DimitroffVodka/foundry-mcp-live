@@ -62,6 +62,8 @@ test("designHarnessReady needs the in-repo engine, a browser and a Foundry insta
   fs.mkdirSync(path.join(app, "public"));
   try {
     withEnvs({ FOUNDRY_DESIGN_HARNESS: undefined, FOUNDRY_APP: app, CHROME: process.execPath }, () => assert.equal(designHarnessReady(), true));
+    // CHROME="" is falsy, so this pins the browser half of the gate on any host.
+    withEnvs({ FOUNDRY_DESIGN_HARNESS: undefined, FOUNDRY_APP: app, CHROME: "" }, () => assert.equal(designHarnessReady(), false));
     withEnvs({ FOUNDRY_DESIGN_HARNESS: undefined, FOUNDRY_APP: path.join(app, "nope"), CHROME: process.execPath }, () => assert.equal(designHarnessReady(), false));
     withEnvs({ FOUNDRY_DESIGN_HARNESS: undefined, FOUNDRY_APP: app, CHROME: path.join(app, "no-chrome") }, () => {
       // CHROME that does not exist is still "set"; the engine reports it. Readiness only asks for some browser.
