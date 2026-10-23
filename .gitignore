@@ -31,3 +31,13 @@ usage-audit.txt
 
 # ui_test sandboxes (throwaway Foundry dataPaths) and run results
 tools/ui-test/.cache/
+
+# Local notes, drafts, recordings and tool folders kept beside the repo
+/.agents/
+/docs/superpowers/
+/EVALUATE-REDUNDANCY.md
+/MUTATION-TELEMETRY-SPEC.md
+/REVIEW.md
+/cdp-sheet-example.png
+/*.mp4
+*.bak
