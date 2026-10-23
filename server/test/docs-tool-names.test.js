@@ -45,6 +45,9 @@ const NON_TOOL_IDENTIFIERS = new Set([
   // `target` is the screenshot discriminator here, not the old standalone
   // token-targeting tool (now `token` action 'target').
   "type", "target", "rig", "api", "game", "version", "ready",
+  // README.md, design harness: `module` is the checkout param all three design
+  // tools take (render_fixture, preview_fixture, write_variant), not a tool.
+  "module",
   "false", "no", "off", "localhost",
 ]);
 
