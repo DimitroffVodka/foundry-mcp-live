@@ -32,7 +32,8 @@ Connect any MCP-compatible AI client (Claude Desktop, Claude Code, Codex CLI, Ge
 ```
 foundry-mcp-live/
 ├── module/    ← Foundry VTT module (copy/symlink into Foundry's modules dir)
-└── server/    ← Node.js MCP server (run locally with npm start)
+├── server/    ← Node.js MCP server (run locally with npm start)
+└── tools/     ← design-harness (shared engine, no install) and ui-test harness
 ```
 
 ## Setup
@@ -326,7 +327,62 @@ A default install registers 27 tools. `FOUNDRY_MCP_ALLOW_WRITE=1` adds the seven
 
 See [server/TOOLS.md](server/TOOLS.md) for full tool schemas and arguments.
 
-Four more tools register only when their prerequisites are on the server host: `render_fixture` and `write_variant` (offline design review without a world), `preview_fixture` (the same fixture as a real window in a live client) — the engine ships in `tools/design-harness/` and needs chromium and a Foundry install (`FOUNDRY_APP`, default `~/FoundryV14/app`); a module supplies only its `tools/design-harness/fixtures/` — and `ui_test` (Playwright specs in a throwaway Foundry sandbox, needs `npm ci` in `tools/ui-test`).
+Four more tools register only when their prerequisites are on the server host: the three design tools (`render_fixture`, `preview_fixture`, `write_variant`, covered in the next section) and `ui_test` (Playwright specs in a throwaway Foundry sandbox, needs `npm ci` in `tools/ui-test`).
+
+## Design review without a world
+
+Rendering a window should not cost you a Foundry launch. `render_fixture`,
+`preview_fixture` and `write_variant` draw one of your module's templates in a v14
+window frame, with core CSS, your system's CSS and your module's stylesheets, and
+tell you what is wrong with it: a button too small, text past the edge, a string
+that never got translated. You do not need a world open, or even a login.
+
+The engine lives here, in `tools/design-harness/`. Your module only supplies
+`tools/design-harness/fixtures/`, one `.mjs` file per window. There is nothing to
+install, because it borrows Handlebars and the stylesheets from a Foundry install
+you already have: `FOUNDRY_APP` (default `~/FoundryV14/app`) plus chromium.
+Without those, the three tools do not appear at all.
+
+All three want `module`, an absolute path to a checkout, or
+`FOUNDRY_DESIGN_MODULE` as a default. Leave it out and the reply lists the
+checkouts that already have fixtures.
+
+```js
+render_fixture({ module: "/home/you/git/your-module", fixture: "bastion-panel", theme: "both" })
+```
+
+Back comes an image per theme and the check the browser overlay prints: visible
+buttons, primary buttons, anything sticking out or too small to click, missing
+string keys. Pass `against: "/home/you/git/your-module-main"` and it renders that
+checkout too, ending each theme with `pixels identical|differ; layout check
+unchanged|CHANGED` and marking what moved. Pass `fixtures: ["base", "v1"]` to
+render several at once and get a self-contained HTML gallery
+(`FOUNDRY_MCP_GALLERY_DIR`, default `~/.cache/foundry-mcp/design-gallery/`).
+`preview_fixture` shows the same window in your running client; `write_variant`
+sketches a variant to compare.
+
+From a shell, without MCP:
+
+```bash
+cd ~/git/your-module
+node ~/git/foundry-mcp-live/tools/design-harness/serve.mjs    # browse: http://127.0.0.1:4177/
+node ~/git/foundry-mcp-live/tools/design-harness/shot.mjs bastion-panel out.png --w=420
+```
+
+If your world is hosted, or the MCP server runs on another machine, the render
+itself does not change: it reads a Foundry application install and the system's
+folder, never the world, so a Forge world needs no token and no port. What changes
+is what has to be on disk. A Forge-only account has no local app files, and then
+the tools do not register: install Foundry at your world's version, point
+`FOUNDRY_APP` at it, and point `SYSTEM_DIR` at a local copy of the system. Get
+`SYSTEM_DIR` wrong and nothing errors, you just render with core CSS only.
+`preview_fixture` is the different one, since it needs a connected client with the
+current `module/` deployed. Where each piece has to live is on [the wiki
+page](docs/wiki/Design-Harness.md#hosted-foundry-or-a-remote-server).
+
+Engine reference: [tools/design-harness/README.md](tools/design-harness/README.md).
+Fixtures, limits and troubleshooting: [the wiki page](docs/wiki/Design-Harness.md).
+Per-argument detail: [server/TOOLS.md](server/TOOLS.md).
 
 ## Multi-user routing
 
@@ -382,6 +438,10 @@ You should get a 200 with an `mcp-session-id` header.
 | `FOUNDRY_RELAUNCH_GM_PASSWORD` | empty | Optional GM password. Read only from the server environment; never accepted as a tool argument or returned. |
 | `FOUNDRY_CHROME_PATH` | empty | Absolute path to the Chrome/Chromium executable used by `puppeteer-core`. |
 | `FOUNDRY_CHROME_USER_DATA_DIR` | empty | Optional dedicated Chrome profile directory for the relaunched client. |
+| `FOUNDRY_DESIGN_MODULE` | empty | Default `module` for the three design tools (`render_fixture`, `preview_fixture`, `write_variant`); without it they require an absolute path per call. |
+| `FOUNDRY_DESIGN_HARNESS` | this repo's `tools/design-harness` | Another engine copy for the design tools to run. |
+| `FOUNDRY_APP` | `~/FoundryV14/app` | Foundry install the design render borrows Handlebars, CSS and assets from (the e2e harness in [Testing](#testing) reads it too); the three design tools register only when its `public/` exists. |
+| `CHROME` | first of `/usr/bin/chromium`, `/usr/bin/google-chrome-stable`, `/usr/bin/google-chrome` | Browser the design render drives. Not `FOUNDRY_CHROME_PATH`, which `puppeteer-core` uses for `relaunch_client` and the relay. |
 | `FOUNDRY_RELAUNCH_ALLOW_REMOTE` | `0` | Set to `1` to allow a non-loopback `FOUNDRY_RELAUNCH_URL`. |
 | `FOUNDRY_WS_HOST` | `127.0.0.1` | Interface the bridge WebSocket binds to. Default is loopback. Set `::` to let another device on your LAN connect — not `0.0.0.0`, which is IPv4-only — see [Connecting a second device](#connecting-a-second-device-on-your-lan). |
 | `FOUNDRY_WS_TOKEN` | (auto-generated when needed) | Shared secret for the **WebSocket bridge only**, required of clients that reach the bridge **from another machine**. A Foundry client on the server's own machine connects without one. You normally don't set this: when the bridge is exposed with `FOUNDRY_WS_HOST`, the server generates a token, saves it to `bridge-token` in its config dir, and a local GM client publishes it into the world so other devices pick it up automatically. Set it explicitly only to choose the value yourself. |
