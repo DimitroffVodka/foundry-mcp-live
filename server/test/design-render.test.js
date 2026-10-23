@@ -8,6 +8,7 @@ import { encodePng } from "../lib/png-diff.js";
 import {
   designHarnessDir,
   designHarnessReady,
+  designChromium,
   designRenderTarget,
   buildDesignRenderInvocation,
   validateDesignTarget,
@@ -34,16 +35,41 @@ function withEnv(value, fn) {
   }
 }
 
-test("designHarnessDir honours FOUNDRY_DESIGN_HARNESS, else the default path", () => {
+test("designHarnessDir honours FOUNDRY_DESIGN_HARNESS, else the engine in this repo", () => {
   withEnv("/x/custom-harness", () => {
     assert.equal(designHarnessDir(), "/x/custom-harness");
   });
   withEnv(undefined, () => {
-    assert.equal(
-      designHarnessDir(),
-      path.join(homedir(), "git", "shadowdark-enhancer", "tools", "design-harness")
-    );
+    const repo = path.resolve(import.meta.dirname, "..", "..");
+    assert.equal(designHarnessDir(), path.join(repo, "tools", "design-harness"));
+    assert.ok(fs.existsSync(path.join(designHarnessDir(), "shot.mjs")), "the engine ships in-repo");
   });
+});
+
+// Registration needs the engine, a browser and a Foundry install; each is overridable by env.
+function withEnvs(vars, fn) {
+  const prev = Object.fromEntries(Object.keys(vars).map(k => [k, process.env[k]]));
+  try {
+    for (const [k, v] of Object.entries(vars)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    return fn();
+  } finally {
+    for (const [k, v] of Object.entries(prev)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+}
+
+test("designHarnessReady needs the in-repo engine, a browser and a Foundry install", () => {
+  const app = fs.mkdtempSync(path.join(tmpdir(), "dh-app-"));
+  fs.mkdirSync(path.join(app, "public"));
+  try {
+    withEnvs({ FOUNDRY_DESIGN_HARNESS: undefined, FOUNDRY_APP: app, CHROME: process.execPath }, () => assert.equal(designHarnessReady(), true));
+    // CHROME="" is falsy, so this pins the browser half of the gate on any host.
+    withEnvs({ FOUNDRY_DESIGN_HARNESS: undefined, FOUNDRY_APP: app, CHROME: "" }, () => assert.equal(designHarnessReady(), false));
+    withEnvs({ FOUNDRY_DESIGN_HARNESS: undefined, FOUNDRY_APP: path.join(app, "nope"), CHROME: process.execPath }, () => assert.equal(designHarnessReady(), false));
+    withEnvs({ FOUNDRY_DESIGN_HARNESS: undefined, FOUNDRY_APP: app, CHROME: path.join(app, "no-chrome") }, () => {
+      // CHROME that does not exist is still "set"; the engine reports it. Readiness only asks for some browser.
+      assert.equal(designChromium(), path.join(app, "no-chrome"));
+    });
+  } finally { fs.rmSync(app, { recursive: true, force: true }); }
 });
 
 test("designHarnessReady is false when shot.mjs is absent", () => {
@@ -52,8 +78,13 @@ test("designHarnessReady is false when shot.mjs is absent", () => {
   });
 });
 
-test("designRenderTarget defaults to the harness's own module and resolves overrides", () => {
-  withEnv("/x/mod/tools/design-harness", () => {
+test("designRenderTarget has no default module: `module`, else FOUNDRY_DESIGN_MODULE", () => {
+  withEnvs({ FOUNDRY_DESIGN_MODULE: undefined }, () => {
+    assert.equal(designRenderTarget({ fixture: "party" }).moduleDir, null);
+    const t = validateDesignTarget({ fixture: "party" });
+    assert.match(t.error, /pass `module`/);
+  });
+  withEnvs({ FOUNDRY_DESIGN_MODULE: "/x/mod" }, () => {
     const def = designRenderTarget({ fixture: "party" });
     assert.equal(def.moduleDir, "/x/mod");
     assert.equal(def.fixtureFile, "/x/mod/tools/design-harness/fixtures/party.mjs");
@@ -194,10 +225,12 @@ test("fetchFixtureFragment fails fast with the harness's stderr when serve.mjs c
 
 // withEnv restores synchronously, before an async render has read the env again.
 async function withEnvAsync(value, fn) {
-  const prev = process.env.FOUNDRY_DESIGN_HARNESS;
-  process.env.FOUNDRY_DESIGN_HARNESS = value;
+  const prev = [process.env.FOUNDRY_DESIGN_HARNESS, process.env.FOUNDRY_DESIGN_MODULE];
+  process.env.FOUNDRY_DESIGN_HARNESS = value; process.env.FOUNDRY_DESIGN_MODULE = path.resolve(value, "..", "..");
   try { return await fn(); }
-  finally { if (prev === undefined) delete process.env.FOUNDRY_DESIGN_HARNESS; else process.env.FOUNDRY_DESIGN_HARNESS = prev; }
+  finally {
+    for (const [k, v] of [["FOUNDRY_DESIGN_HARNESS", prev[0]], ["FOUNDRY_DESIGN_MODULE", prev[1]]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
 }
 
 // A fake harness: shot.mjs writes "the look" of whichever module it renders

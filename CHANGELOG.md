@@ -43,6 +43,13 @@ All notable changes to Foundry MCP Live are documented in this file.
 
 ### Changed
 
+- **The design harness ships here.** The engine (`tools/design-harness/`:
+  `shot.mjs`, `serve.mjs`) moved out of Shadowdark Enhancer; a module keeps only
+  its own `tools/design-harness/fixtures/`. `render_fixture`, `preview_fixture`
+  and `write_variant` register whenever chromium and a Foundry install are
+  found. All three now need `module` (or `FOUNDRY_DESIGN_MODULE`).
+  `FOUNDRY_DESIGN_HARNESS` still overrides the engine path.
+
 - `request_roll` uses DialogV2 instead of the deprecated v1 `Dialog`.
 - Change-log undo and its store remove keys with V14's `ForcedDeletion`
   operator instead of the `-=key` syntax V14 deprecates (removed in 16); V13
