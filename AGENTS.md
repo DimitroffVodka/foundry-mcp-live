@@ -98,7 +98,7 @@ The plugin (`plugins/foundry-mcp-live/`) only points at a running server; it nev
 
 1. MCP server is running: `cd server && npm start` (or `server\start.bat` on Windows). Default port 3000.
 2. Foundry VTT is open with the `foundry-mcp-live` module active. The module connects to the server's WebSocket bridge on port 3001.
-3. The connecting Foundry client has **"Auto-connect to MCP server"** enabled (module setting, default on) — or is the dedicated headless bridge client, which always connects. A play client with auto-connect off can connect on demand from the console with `mcpBridge.reconnect()`.
+3. The connecting Foundry client has **"Auto-connect to MCP server"** enabled (module setting, default on for GMs, off for players) — or is the dedicated headless bridge client, which always connects. A play client with auto-connect off can connect on demand from the console with `mcpBridge.reconnect()`.
 4. `list_connected_bridges` returns at least one bridge — confirms the Foundry-side handshake worked.
 
 ## If `BRIDGE_TOKEN` is set

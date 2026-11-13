@@ -4,7 +4,7 @@
  * touches `game`/`Hooks` at module scope and can't be imported outside the
  * browser). Pure: the caller reads the two settings and passes them as booleans.
  *
- *   optedIn  = game.settings.get(MODULE_ID, "autoConnect")  // client setting, default on
+ *   optedIn  = game.settings.get(MODULE_ID, "autoConnect")  // client setting, default on for GMs only
  *   headless = !!game.settings.get("core", "noCanvas")      // dedicated headless bridge client
  *
  * The headless (no-canvas) bridge client always connects, even when a GM has
