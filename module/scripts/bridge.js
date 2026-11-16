@@ -4989,24 +4989,24 @@ Hooks.once("init", () => {
   });
 
   // Per-client toggle for auto-connecting to the MCP server on world load.
-  // Default ON so the bridge connects (and the MCP tools become available) as
-  // soon as a world loads — the long-standing behavior. Turn it OFF on a client
-  // used only for interactive play if you don't want the bridge socket and its
-  // 5s reconnect loop running; connect on demand from the console with
-  // mcpBridge.reconnect(). The dedicated headless (no-canvas) bridge client
-  // always auto-connects regardless of this setting.
-  game.settings.register(MODULE_ID, "autoConnect", {
+  // Default ON for GMs, OFF for players: a player joining someone else's world
+  // would otherwise dial ws://localhost:3001 — their OWN machine — and either
+  // spam reconnect errors or register the GM's world on their own MCP server.
+  // A player who set it on explicitly keeps it (a stored value beats the
+  // default). Registered at `setup` because game.user does not exist at `init`.
+  // The dedicated headless (no-canvas) bridge client always auto-connects.
+  Hooks.once("setup", () => game.settings.register(MODULE_ID, "autoConnect", {
     name: "Auto-connect to MCP server",
-    hint: "When on (default), THIS browser connects to the MCP/Claude bridge "
-        + "automatically once the world loads. Turn it off on a play-only client "
-        + "to avoid the bridge socket + reconnect loop, then connect on demand "
-        + "from the console with mcpBridge.reconnect(). The headless no-canvas "
-        + "bridge client always auto-connects regardless of this setting.",
+    hint: "When on, THIS browser connects to the MCP/Claude bridge automatically "
+        + "once the world loads. Default: on for GMs, off for players. Turn it off "
+        + "on a play-only client to avoid the bridge socket + reconnect loop, then "
+        + "connect on demand from the console with mcpBridge.reconnect(). The "
+        + "headless no-canvas bridge client always auto-connects regardless.",
     scope: "client",
     config: true,
     type: Boolean,
-    default: true,
-  });
+    default: !!game.user?.isGM,
+  }));
 
   // Gateway public keys for the Foundry-mediated relay, published by the MCP
   // server through its gateway browser. Not user-facing (config: false) — it's

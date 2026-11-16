@@ -82,6 +82,12 @@ All notable changes to Foundry MCP Live are documented in this file.
 
 ### Fixed
 
+- **Players no longer auto-connect to the MCP server.** "Auto-connect to MCP
+  server" now defaults on for GMs and off for players. A player joining a world
+  that has the module enabled used to dial `ws://localhost:3001` on their own
+  machine: a reconnect-error loop, or, if they run their own MCP server, the
+  GM's world registered on it. A player who turned the setting on keeps it.
+
 - **The relay's world-load notice no longer fires on a device the MCP server can
   already reach.** The relay runs on every client by design, and it announced
   itself on every world load: a world whose gateway lives elsewhere (a hosted

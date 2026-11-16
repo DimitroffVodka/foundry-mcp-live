@@ -47,11 +47,12 @@ server, which the AI cannot change.
 |---|---|
 | Key | `foundry-mcp-live.autoConnect` |
 | Scope | Client — each browser |
-| Default | **On** |
+| Default | **On** for GMs, **off** for players |
 | Type | Boolean |
 
 When on, this browser dials the bridge as soon as the world loads, and retries
-every 5 s while disconnected. Turn it off on a play-only client that should not
+every 5 s while disconnected. Players default to off: the bridge address is
+`localhost`, so a player's browser would dial their own machine, not the GM's. Turn it off on a play-only client that should not
 carry a bridge socket; connect on demand from the console with
 `mcpBridge.reconnect()`.
 
