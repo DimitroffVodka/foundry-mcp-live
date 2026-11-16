@@ -4,6 +4,8 @@ All notable changes to Foundry MCP Live are documented in this file.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-16
+
 ### Added
 
 - **Journals without `evaluate`.** `list {type:"journal"}` lists entries and
