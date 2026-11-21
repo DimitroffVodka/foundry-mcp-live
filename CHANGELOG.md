@@ -4,6 +4,15 @@ All notable changes to Foundry MCP Live are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Editor autosave guard.** A journal page open in Foundry's editor with
+  typed text silently puts its old text back over an AI write at the next
+  server autosave (60 s), with no update hook to see it. The bridge now
+  watches the `pm.autosave` socket event: a logged write it undid gets
+  `lostTo` in `changes`, a console warning and a GM notification, and a write
+  to a page an editor autosaved in the last 10 minutes gets a `warning`.
+
 ## [1.1.0] - 2026-11-16
 
 ### Added

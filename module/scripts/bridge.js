@@ -18,7 +18,7 @@ import { relayRefusal } from "../lib/relay-guard.js";
 import { chatContent, forViewer, forViewerAt, pathTokens, removeSecrets } from "../lib/read-filter.js";
 import { accessRefusal, HANDLER_ACCESS, MUTATION_SETTING } from "../lib/handler-access.js";
 import {
-  createChangeLog, describeEntry, forcedDeletion, isChangeStore, loadStored, OUTSIDE_THE_LOG, STORE_FLAG, STORE_OPTION, storeDelta,
+  autosaveLoss, createChangeLog, describeEntry, forcedDeletion, isChangeStore, loadStored, OUTSIDE_THE_LOG, STORE_FLAG, STORE_OPTION, storeDelta,
   undo as undoChanges,
 } from "../lib/change-log.js";
 import { resolveClientId } from "./relay-identity.js";
@@ -104,15 +104,45 @@ function recordChange(action, doc, options, before, after) {
   const call = options?.mcpChange;
   if (call?.client !== CLIENT_TAG) return;
   try {
-    changeLog.record({
+    const entry = changeLog.record({
       ...call, action, before, after,
       documentName: doc.documentName, uuid: doc.uuid, name: doc.name ?? null,
       parentUuid: doc.parent?.uuid ?? null, pack: doc.pack ?? null,
       embedded: Object.values(doc.constructor?.metadata?.embedded ?? {}),
     });
+    if (action === "update" && Date.now() - (lastAutosave.get(doc.uuid) ?? 0) < EDITOR_OPEN_MS) {
+      entry.warning = "an editor autosaved this document in the last 10 minutes, so it is probably open with typed "
+        + "text; its next autosave can put the old text back (reported as lostTo)";
+      console.warn(`${MODULE_ID} | ${entry.id} "${entry.name ?? doc.uuid}": ${entry.warning}`);
+    }
   } catch (err) { console.warn(`${MODULE_ID} | change log: ${err.message}`); }
   scheduleStoreWrite();
 }
+
+// Editor autosaves bypass every document hook (lib/change-log.js "Editor
+// autosave"); `pm.autosave` is the only sign, sent to every client.
+const lastAutosave = new Map(); // document uuid -> ms of its last pm.autosave
+const EDITOR_OPEN_MS = 10 * 60 * 1000;
+
+function onEditorAutosave(instance, html) {
+  const [uuid, field] = String(instance ?? "").split("#");
+  if (!uuid || !field) return;
+  lastAutosave.set(uuid, Date.now());
+  const lost = autosaveLoss(changeLog.entries, uuid, field, html);
+  if (!lost) return;
+  lost.lostTo = { by: "editor-autosave", time: new Date().toISOString(), field };
+  changeLog.dirty.add(lost.id);
+  scheduleStoreWrite();
+  const msg = `An open editor's autosave put back the old ${field} of "${lost.name ?? uuid}" over AI change ${lost.id}. `
+    + `Close that editor, then re-apply the text from changes {entryId: "${lost.id}"} (its after snapshot).`;
+  console.warn(`${MODULE_ID} | ${msg}`);
+  if (game.user?.isGM) ui.notifications?.warn(msg, { permanent: true });
+}
+
+Hooks.once("ready", () => {
+  try { game.socket.on("pm.autosave", onEditorAutosave); }
+  catch (err) { console.warn(`${MODULE_ID} | editor autosave watch: ${err.message}`); }
+});
 
 function scheduleStoreWrite() {
   if (!game.user?.isGM || storeTimer || !changeLog.dirty.size) return;

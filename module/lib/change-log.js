@@ -99,6 +99,40 @@ export function createChangeLog({ limit = LOG_LIMIT, maxChars = MAX_SNAPSHOT_CHA
   };
 }
 
+// ---------------------------------------------------------------------------
+// Editor autosave. While a text field is open in Foundry's editor, the server
+// keeps its own copy and writes it back every core.editorAutosaveSecs (60 s),
+// straight to the database: no update hook fires, only `pm.autosave(instance,
+// html)` reaches every client. A document update never reaches that copy, so
+// an editor holding typed text puts the old text back over a logged write.
+// ---------------------------------------------------------------------------
+
+export const AUTOSAVE_WATCH_MS = 6 * 60 * 60 * 1000;
+
+const wordsOf = html => new Set(String(html ?? "").replace(/<[^>]*>/g, " ").replace(/&[#\w]+;/g, " ")
+  .toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
+const valueAt = (obj, path) => path.split(".").reduce((v, k) => v?.[k], obj);
+
+/**
+ * The logged write an autosave of `field` on `uuid` just undid, or null. Only
+ * the latest entry for the document counts, within `ttlMs`. Lost means fewer
+ * than half the words the write added (or, for a write that only removed text,
+ * removed) match the autosaved text; an editor that picked the write up and
+ * kept typing keeps them. A write that changed markup only cannot be judged
+ * and is never reported.
+ */
+export function autosaveLoss(entries, uuid, field, html, { nowMs = Date.now(), ttlMs = AUTOSAVE_WATCH_MS } = {}) {
+  const e = entries.findLast(x => x.uuid === uuid);
+  if (!e?.after || e.undoneBy || e.lostTo || nowMs - Date.parse(e.time) > ttlMs) return null;
+  const was = valueAt(e.before, field), wrote = valueAt(e.after, field);
+  if (typeof wrote !== "string" || was === wrote) return null;
+  const b = wordsOf(was), a = wordsOf(wrote), saved = wordsOf(html);
+  const added = [...a].filter(w => !b.has(w)), removed = [...b].filter(w => !a.has(w));
+  const kept = added.length ? added.filter(w => saved.has(w)).length / added.length
+    : removed.length ? removed.filter(w => !saved.has(w)).length / removed.length : 1;
+  return kept < 0.5 ? e : null;
+}
+
 /** Summary of an entry for listing; snapshots only when asked for. */
 export function describeEntry(e, full = false) {
   const { before, after, embedded, seq, ...rest } = e;
