@@ -133,8 +133,10 @@ function onEditorAutosave(instance, html) {
   lost.lostTo = { by: "editor-autosave", time: new Date().toISOString(), field };
   changeLog.dirty.add(lost.id);
   scheduleStoreWrite();
-  const msg = `An open editor's autosave put back the old ${field} of "${lost.name ?? uuid}" over AI change ${lost.id}. `
-    + `Close that editor, then re-apply the text from changes {entryId: "${lost.id}"} (its after snapshot).`;
+  // The payload cannot tell a stale editor from a GM who deliberately removed the text, so name neither.
+  const msg = `An editor autosave of "${lost.name ?? uuid}" (${field}) no longer contains what AI change ${lost.id} `
+    + `wrote: either the editor was open with older text, or someone removed it on purpose. Ask before re-applying `
+    + `the text from changes {entryId: "${lost.id}"} (its after snapshot), with the editor closed.`;
   console.warn(`${MODULE_ID} | ${msg}`);
   if (game.user?.isGM) ui.notifications?.warn(msg, { permanent: true });
 }

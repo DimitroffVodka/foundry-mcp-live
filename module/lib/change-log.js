@@ -114,18 +114,20 @@ const wordsOf = html => new Set(String(html ?? "").replace(/<[^>]*>/g, " ").repl
 const valueAt = (obj, path) => path.split(".").reduce((v, k) => v?.[k], obj);
 
 /**
- * The logged write an autosave of `field` on `uuid` just undid, or null. Only
- * the latest entry for the document counts, within `ttlMs`. Lost means fewer
+ * The logged write an autosave of `field` on `uuid` no longer contains, or null. Only
+ * the latest entry that changed that field counts, within `ttlMs`; later
+ * writes to other fields of the document do not hide it. Lost means fewer
  * than half the words the write added (or, for a write that only removed text,
  * removed) match the autosaved text; an editor that picked the write up and
- * kept typing keeps them. A write that changed markup only cannot be judged
- * and is never reported.
+ * kept typing keeps them. A GM who picked it up and deliberately deleted it
+ * looks the same, so callers must not claim which happened. A write that
+ * changed markup only cannot be judged and is never reported.
  */
 export function autosaveLoss(entries, uuid, field, html, { nowMs = Date.now(), ttlMs = AUTOSAVE_WATCH_MS } = {}) {
-  const e = entries.findLast(x => x.uuid === uuid);
+  const e = entries.findLast(x => x.uuid === uuid && valueAt(x.before, field) !== valueAt(x.after, field));
   if (!e?.after || e.undoneBy || e.lostTo || nowMs - Date.parse(e.time) > ttlMs) return null;
   const was = valueAt(e.before, field), wrote = valueAt(e.after, field);
-  if (typeof wrote !== "string" || was === wrote) return null;
+  if (typeof wrote !== "string") return null;
   const b = wordsOf(was), a = wordsOf(wrote), saved = wordsOf(html);
   const added = [...a].filter(w => !b.has(w)), removed = [...b].filter(w => !a.has(w));
   const kept = added.length ? added.filter(w => saved.has(w)).length / added.length

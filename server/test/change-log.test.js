@@ -374,3 +374,17 @@ test("autosaveLoss: an editor autosave that puts the old text back is reported, 
     before, after: { ...before, text: { content: "<p><strong>The goblins fled north.</strong></p>" } } });
   assert.equal(autosaveLoss(markup.entries, page, field, before.text.content, { nowMs }), null);
 });
+
+test("autosaveLoss: a later write to another field of the document does not hide the write the autosave undid", () => {
+  const page = "JournalEntry.j1.JournalEntryPage.p1";
+  const log = createChangeLog({ now: () => "2026-11-21T12:00:00.000Z" });
+  const nowMs = Date.parse("2026-11-21T12:01:00.000Z");
+  const a = { name: "Notes", text: { content: "<p>The goblins fled north.</p>" } };
+  const b = { name: "Notes", text: { content: "<p>The goblins fled north.</p><p>Ambush at the ford, two wolves.</p>" } };
+  log.record({ callId: "c", tool: "evaluate", action: "update", documentName: "JournalEntryPage", uuid: page, before: a, after: b });
+  log.record({ callId: "d", tool: "evaluate", action: "update", documentName: "JournalEntryPage", uuid: page, before: b, after: { ...b, name: "Session 3" } });
+  assert.equal(autosaveLoss(log.entries, page, "text.content", a.text.content, { nowMs })?.id, "c1");
+  // The latest write to the field is the one judged: once it is undone, an older one is not reported in its place.
+  log.entries[0].undoneBy = "u";
+  assert.equal(autosaveLoss(log.entries, page, "text.content", a.text.content, { nowMs }), null);
+});
