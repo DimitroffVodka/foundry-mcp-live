@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createChangeLog, forcedDeletion, restoreUpdate, undo, describeEntry, storeDelta, loadStored } from "../../module/lib/change-log.js";
+import { autosaveLoss, createChangeLog, forcedDeletion, restoreUpdate, undo, describeEntry, storeDelta, loadStored } from "../../module/lib/change-log.js";
 
 const clone = (v) => structuredClone(v);
 
@@ -339,4 +339,52 @@ test("store: the total character cap prunes oldest first and always keeps the ne
   const { set } = storeDelta({}, "t", log.entries, { maxChars: size * 2 + 1 });
   assert.deepEqual(Object.keys(set).map(k => k.split("_")[2]), ["c3", "c4"]);
   assert.deepEqual(Object.keys(storeDelta({}, "t", log.entries, { maxChars: 1 }).set).map(k => k.split("_")[2]), ["c4"]);
+});
+
+test("autosaveLoss: an editor autosave that puts the old text back is reported, one that kept the write is not", () => {
+  const page = "JournalEntry.j1.JournalEntryPage.p1";
+  const field = "text.content";
+  const log = createChangeLog({ now: () => "2026-11-21T12:00:00.000Z" });
+  const nowMs = Date.parse("2026-11-21T12:01:00.000Z");
+  const before = { name: "Notes", text: { content: "<p>The goblins fled north.</p>" } };
+  const after = { name: "Notes", text: { content: "<p>The goblins fled north.</p><p>Ambush at the ford, two wolves.</p>" } };
+  log.record({ callId: "c", tool: "evaluate", action: "update", documentName: "JournalEntryPage", uuid: page, before, after });
+
+  // Reverted, with the GM's own typing on top: our added words are gone.
+  const lost = autosaveLoss(log.entries, page, field, "<p>The goblins fled north. Also a troll.</p>", { nowMs });
+  assert.equal(lost?.id, "c1");
+  // The editor picked the write up and kept typing: not a loss.
+  assert.equal(autosaveLoss(log.entries, page, field, `${after.text.content}<p>More.</p>`, { nowMs }), null);
+  // Another field, another document, too late, already undone or reported: not reported.
+  assert.equal(autosaveLoss(log.entries, page, "system.notes", before.text.content, { nowMs }), null);
+  assert.equal(autosaveLoss(log.entries, "JournalEntry.j1.JournalEntryPage.p2", field, before.text.content, { nowMs }), null);
+  assert.equal(autosaveLoss(log.entries, page, field, before.text.content, { nowMs, ttlMs: 1000 }), null);
+  log.entries[0].lostTo = { by: "editor-autosave" };
+  assert.equal(autosaveLoss(log.entries, page, field, before.text.content, { nowMs }), null);
+
+  // A write that only removed text is lost when the removed words come back.
+  const cut = createChangeLog({ now: () => "2026-11-21T12:00:00.000Z" });
+  cut.record({ callId: "c", tool: "evaluate", action: "update", documentName: "JournalEntryPage", uuid: page, before: after, after: before });
+  assert.equal(autosaveLoss(cut.entries, page, field, after.text.content, { nowMs })?.id, "c1");
+  assert.equal(autosaveLoss(cut.entries, page, field, before.text.content, { nowMs }), null);
+
+  // Markup-only change: cannot be judged, never reported.
+  const markup = createChangeLog({ now: () => "2026-11-21T12:00:00.000Z" });
+  markup.record({ callId: "c", tool: "evaluate", action: "update", documentName: "JournalEntryPage", uuid: page,
+    before, after: { ...before, text: { content: "<p><strong>The goblins fled north.</strong></p>" } } });
+  assert.equal(autosaveLoss(markup.entries, page, field, before.text.content, { nowMs }), null);
+});
+
+test("autosaveLoss: a later write to another field of the document does not hide the write the autosave undid", () => {
+  const page = "JournalEntry.j1.JournalEntryPage.p1";
+  const log = createChangeLog({ now: () => "2026-11-21T12:00:00.000Z" });
+  const nowMs = Date.parse("2026-11-21T12:01:00.000Z");
+  const a = { name: "Notes", text: { content: "<p>The goblins fled north.</p>" } };
+  const b = { name: "Notes", text: { content: "<p>The goblins fled north.</p><p>Ambush at the ford, two wolves.</p>" } };
+  log.record({ callId: "c", tool: "evaluate", action: "update", documentName: "JournalEntryPage", uuid: page, before: a, after: b });
+  log.record({ callId: "d", tool: "evaluate", action: "update", documentName: "JournalEntryPage", uuid: page, before: b, after: { ...b, name: "Session 3" } });
+  assert.equal(autosaveLoss(log.entries, page, "text.content", a.text.content, { nowMs })?.id, "c1");
+  // The latest write to the field is the one judged: once it is undone, an older one is not reported in its place.
+  log.entries[0].undoneBy = "u";
+  assert.equal(autosaveLoss(log.entries, page, "text.content", a.text.content, { nowMs }), null);
 });
